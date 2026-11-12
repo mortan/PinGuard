@@ -7,7 +7,8 @@ imbalance, and keeps an eye on power, efficiency, temperature and fan.
 PinGuard is made to sit on a second monitor while you game, so it is built to cost you
 **practically nothing**:
 
-- **~14 MB RAM** (only **3 MB** of it private; the rest is shared Windows DLLs)
+- **~3 MB RAM** as shown in Task Manager (the working set of ~14–17 MB also counts Windows DLLs
+  that are shared with other programs)
 - **0.03 % CPU** on average (about 4 ms of work per second, 4 threads)
 - **No GPU load at all**: no Direct3D, no overlay hooks, no animation loop. It only redraws when new data arrives
 - A single **~340 KB** EXE, with no installer and no runtime
