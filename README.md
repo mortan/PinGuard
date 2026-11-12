@@ -166,15 +166,15 @@ Right-click → *Limits and alarms …* (changes apply immediately):
 | Pin yellow from | 8 A |
 | Pin red / overcurrent from | 9.2 A |
 | Bar full scale | 12 A |
-| Imbalance measured as | amps |
-| Imbalance limit (highest − lowest pin), amps mode | 3 A |
+| Imbalance measured as | percent |
 | Imbalance limit (largest deviation of a pin from the average), percent mode | 30 % |
 | Percent mode only above a connector current of | 20 A |
+| Imbalance limit (highest − lowest pin), amps mode | 3 A |
 | Rated power per connector (for the load figure) | 600 W |
 
-**Amps or percent?** *Amps* compares the strongest with the weakest pin. It is meaningful under
-high load but can miss even a failed pin at low load. *Percent* scales with the load: a failed pin
-is 100 % deviation. Below the minimum current it isn't evaluated, because measurement noise alone
+**Percent or amps?** *Percent* (the default) scales with the load: a failed pin is 100 %
+deviation, whether the card draws 200 W or 600 W. *Amps* compares the strongest with the weakest
+pin. It is meaningful under high load but can miss even a failed pin at low load. Below the minimum current it isn't evaluated, because measurement noise alone
 causes large percentages there. Either way the imbalance figure turns yellow at half the limit and
 red at the limit.
 
@@ -185,7 +185,12 @@ For every alarm (connector 1, connector 2, overcurrent, imbalance, no data) you 
 - **Sound:** play a warning sound when it fires
 - **Show:** bring the window to the front (without stealing focus) and flash it in the taskbar
 
-By default all alarms are active and latching, without sound and without *Show*.
+By default all alarms are active and latching. The alarms from the PSU (connector 1 and 2) and
+overcurrent also play a sound, since you rarely look at a second monitor while gaming. Imbalance
+and no data stay silent. *Show* is off for all of them.
+
+These defaults only apply when there is no `pinguard.ini` yet. PinGuard writes the file with all
+settings, so later versions with different defaults don't change an existing setup.
 
 The same dialog lets you show or hide each metric, the rails, the yellow warning line, the average
 line and the history chart.

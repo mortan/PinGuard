@@ -60,7 +60,7 @@ impl Default for Limits {
             pin_warn_a: 8.0,
             pin_limit_a: 9.2,
             full_scale_a: 12.0,
-            imbalance_mode: ImbalanceMode::Amps,
+            imbalance_mode: ImbalanceMode::Percent,
             imbalance_a: 3.0,
             imbalance_pct: 30.0,
             imbalance_min_load_a: 20.0,
@@ -254,7 +254,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { limits: Limits::default(), alarms: Default::default(), show: METRICS.map(Metric::default_shown) }
+        Config { limits: Limits::default(), alarms: FAULTS.map(Fault::default_alarm), show: METRICS.map(Metric::default_shown) }
     }
 }
 
@@ -560,6 +560,14 @@ impl Fault {
     pub fn title(self) -> &'static str {
         crate::i18n::t().fault_titles[self as usize]
     }
+    /// Standardverhalten: alle aktiv und haltend. Überstrom und die Alarme
+    /// des Netzteils melden sich zusätzlich mit Ton, weil man beim Spielen
+    /// selten auf den zweiten Monitor schaut. Schieflast und Verbindung
+    /// bleiben still (treten öfter auf und sind weniger dringend).
+    pub fn default_alarm(self) -> AlarmCfg {
+        let sound = matches!(self, Fault::Alarm1 | Fault::Alarm2 | Fault::OverCurrent);
+        AlarmCfg { sound, ..AlarmCfg::default() }
+    }
 }
 
 /// Lokale Uhrzeit. Kommt von außen (`main.rs` per `GetLocalTime`), damit das
@@ -849,6 +857,18 @@ mod tests {
     }
 
     #[test]
+    fn defaults() {
+        let cfg = Config::default();
+        assert_eq!(cfg.limits.imbalance_mode, ImbalanceMode::Percent);
+        for f in FAULTS {
+            let a = cfg.alarm(f);
+            assert!(a.enabled && a.latch && !a.show, "{f:?}");
+            let loud = matches!(f, Fault::Alarm1 | Fault::Alarm2 | Fault::OverCurrent);
+            assert_eq!(a.sound, loud, "{f:?}");
+        }
+    }
+
+    #[test]
     fn stats() {
         let s = snap([7.5, 7.0, 8.0, 7.5, 7.5, 7.5], [0.0; 6]);
         let c = ConnectorStats::from_snapshot(&s, 0);
@@ -979,8 +999,10 @@ mod tests {
         m.update(Some(&s), &cfg);
         assert!(m.fault(Fault::Imbalance).active);
         // gleiche Lage im Ampere-Modus: kein Alarm
+        let mut amps = Config::default();
+        amps.limits.imbalance_mode = ImbalanceMode::Amps;
         let mut m2 = Monitor::default();
-        m2.update(Some(&s), &Config::default());
+        m2.update(Some(&s), &amps);
         assert!(!m2.fault(Fault::Imbalance).active);
         // unter Mindestlast (Σ 9,6 A) wird nicht bewertet, obwohl ein Pin fehlt
         let low = snap([2.0, 0.0, 1.9, 1.9, 1.9, 1.9], [0.0; 6]);
@@ -1077,7 +1099,8 @@ mod tests {
 
     #[test]
     fn alarm_memo() {
-        let cfg = Config::default();
+        let mut cfg = Config::default();
+        cfg.limits.imbalance_mode = ImbalanceMode::Amps;
         let mut m = Monitor::default();
         let ok = snap([7.0; 6], [0.0; 6]);
         m.update_at(Some(&ok), &cfg, at(0, 14, 30));
