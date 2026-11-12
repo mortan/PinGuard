@@ -96,7 +96,13 @@ automatically as soon as the data is there.
 
 ## Installation
 
-Put `pinguard.exe` anywhere and start it. To run it at logon, right-click → *Start with Windows*.
+Download `pinguard.exe` from the [latest release](https://github.com/mortan/PinGuard/releases/latest),
+put it anywhere and start it. There is no installer. To run it at logon, right-click →
+*Start with Windows*.
+
+The EXE is not code-signed, so Windows SmartScreen may warn about an unknown publisher on the
+first start (*More info* → *Run anyway*). Each release also lists the file's SHA-256 checksum
+(`pinguard.exe.sha256`), which you can compare with `Get-FileHash pinguard.exe` in PowerShell.
 
 Settings are stored in `%APPDATA%\PinGuard\pinguard.ini`.
 

@@ -1,0 +1,51 @@
+name: Release
+
+# Pushing a tag like v0.1.0 builds pinguard.exe on Windows and publishes it
+# as a GitHub release together with its SHA-256 checksum.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Check that the tag matches Cargo.toml
+        shell: pwsh
+        run: |
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            Write-Error "Tag ${{ github.ref_name }} does not match Cargo.toml version $version"
+            exit 1
+          }
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash target/release/pinguard.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  pinguard.exe" | Out-File -Encoding ascii -NoNewline pinguard.exe.sha256
+          Get-Content pinguard.exe.sha256
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" `
+            target/release/pinguard.exe pinguard.exe.sha256 `
+            --title "PinGuard ${{ github.ref_name }}" `
+            --generate-notes
