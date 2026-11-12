@@ -22,7 +22,7 @@ The same load cycle in the minimal view:
 
 - Windows 11
 - **MSI MPG Ai1300TS PCIE5** with its USB cable connected to the mainboard
-- **[MSI Afterburner](https://www.msi.com/Landing/afterburner/graphics-cards)** (tested with 4.6.7 beta),
+- **[MSI Afterburner](https://www.msi.com/Landing/afterburner/graphics-cards)** **4.6.7 or newer**,
   running in the background
 
 PinGuard does not talk to the power supply itself. Afterburner's bundled **PSU monitoring plugin**
@@ -34,12 +34,14 @@ Server (the on-screen display) is not needed.
 
 You only need to do this once.
 
-1. Install MSI Afterburner, only from msi.com or Guru3D. The PSU plugin
-   (`Plugins\Monitoring\PSU.dll`) is included; if it is missing in your version, use the
-   current beta.
+MSI describes the same setup with screenshots in their article
+[MSI GPU Safeguard+ x MSI Afterburner](https://www.msi.com/blog/msi-gpu-safeguard-msi-afterburner-protect-your-gpu-by-reducing-power-during-abnormal-current).
+
+1. Install MSI Afterburner 4.6.7 or newer, only from msi.com or Guru3D (MSI warns about fake
+   download sites). The PSU plugin (`Plugins\Monitoring\PSU.dll`) is included.
 2. Open Afterburner's **Settings** and go to the **Monitoring** tab.
-3. Click the **…** button next to *Active hardware monitoring graphs*, tick **PSU.dll** in the
-   list of monitoring plugins and confirm with OK.
+3. Click the **…** button next to *Active hardware monitoring graphs*. In the window
+   *Hardware monitoring plugins*, tick **PSU.dll** and confirm with OK.
 4. Back in the list of *Active hardware monitoring graphs*, the new PSU entries now appear. Tick
    these (Afterburner only publishes ticked entries):
    - `PSU 12VHPWR1_1 current` … `PSU 12VHPWR1_6 current` (the six pins, **required**)
@@ -56,6 +58,23 @@ You only need to do this once.
    Afterburner is always running in the background.
 6. Click **OK**. The values now update once per second (Afterburner's default
    *Hardware polling period* of 1000 ms).
+
+### Recommended: let Afterburner react to alarms (GPU Safeguard+)
+
+PinGuard shows and warns, but it doesn't change anything on your system. Afterburner can act
+on its own: with **MSI GPU Safeguard+** enabled, it lowers the graphics card's power limit to
+75 % as soon as the power supply reports abnormal current on the connector, and the PSU beeps.
+Both work side by side.
+
+1. In the **Monitoring** tab, select `PSU 12VHPWR1 alarm` (or `PSU 12VHPWR2 alarm` for the
+   connector you actually use) and tick **Enable MSI GPU Safeguard+**.
+2. Click the **…** button next to it, tick **Launch application on alarm** and load the
+   **lowpowerprofile** that ships with Afterburner.
+
+Screenshots of both steps are in
+[MSI's article](https://www.msi.com/blog/msi-gpu-safeguard-msi-afterburner-protect-your-gpu-by-reducing-power-during-abnormal-current).
+If an alarm fires, shut the PC down and check that the 12V-2x6 connector is fully seated and the
+cable is undamaged.
 
 If Afterburner isn't running or publishes no PSU values, PinGuard shows a notice and connects
 automatically as soon as the data is there.
