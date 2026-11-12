@@ -12,7 +12,7 @@ PinGuard is made to sit on a second monitor while you game, so it is built to co
 - **No GPU load at all**: no Direct3D, no overlay hooks, no animation loop. It only redraws when new data arrives
 - A single **~340 KB** EXE, with no installer and no runtime
 
-![PinGuard during an overcurrent on pin 3](docs/screenshot.png)
+![PinGuard: live pin currents rising until pin 3 triggers an overcurrent alarm, which stays latched](docs/demo.gif)
 
 ## Requirements
 
