@@ -5,14 +5,17 @@ values of the **MSI MPG Ai1300TS PCIE5**. It reads MSI Afterburner's shared memo
 (`MAHMSharedMemory`, PSU plugin `PSU.dll`) read-only and shows per-pin currents, faults and metrics.
 It runs on a second monitor while gaming, so **minimal RAM/CPU/GPU usage is the top requirement**.
 
-Detailed docs (German): `README.md` (features, INI keys, design decisions, measurements),
-`HANDOVER.md` (original brief, MAHM layout, thresholds), `PLAN-Datenquellen.md` and
-`docs/hid-protokoll-analyse.md` (planned direct HID / HWiNFO data sources).
+Detailed docs: `README.md` (German; features, INI keys, MAHM details, design decisions,
+measurements), `docs/plan-data-sources.md` and `docs/hid-protocol-analysis.md` (planned direct
+HID / HWiNFO data sources).
+
+Thresholds: 12V-2x6 spec allows 9.2 A per pin (≈ 8.3 A/pin at 600 W). Default colors: green < 8 A,
+yellow 8–9.2 A, red ≥ 9.2 A, full scale 12 A.
 
 ## Build and test
 
 ```bash
-cargo build --release      # target\release\pinguard.exe (~190 KB, no console window)
+cargo build --release      # target\release\pinguard.exe (~340 KB, no console window)
 cargo test
 cargo run -- --mock        # fake data, no hardware needed (--mock2: both connectors in use)
 ```
@@ -37,7 +40,6 @@ src/
   events.rs        event log events.csv
   autostart.rs     HKCU\...\Run entry
   source/          trait PsuSource; mahm.rs (Afterburner), mock.rs (fake data)
-rtss/              RTSS overlays and Python generators, not part of the app
 ```
 
 ## Hard constraints
@@ -50,7 +52,7 @@ rtss/              RTSS overlays and Python generators, not part of the app
   Handle `0xDEAD` signature and a frozen timestamp (10 s) by reconnecting.
 - Snapshot values are `Option<f32>`; missing sources are normal.
 - Data access stays behind `PsuSource` so a direct HID source can replace Afterburner later.
-  Nothing may ever be sent to the PSU outside the whitelist in `PLAN-Datenquellen.md`.
+  Nothing may ever be sent to the PSU outside the whitelist in `docs/plan-data-sources.md`.
 - Keep dependencies minimal (currently only the `windows` crate); release profile is size-optimized.
 
 ## Conventions

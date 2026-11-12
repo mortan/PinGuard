@@ -1,13 +1,11 @@
-# GpuMon
+# PinGuard
 
 Kompakter Monitor für den 12V-2x6-Stecker (12VHPWR) und die Netzteilwerte des
 **MSI MPG Ai1300TS PCIE5**. Er zeigt Ströme pro Pin, Fehlerstatus und
 Kennzahlen, ähnlich wie WireView, nur dichter gepackt. Gedacht für den zweiten
 Monitor beim Spielen, daher auf minimalen Verbrauch ausgelegt.
 
-![GpuMon live](docs/screenshot.png)
-
-Mock-Modus mit Schieflast, Alarm und gelatchtem Überstrom: [docs/screenshot-mock-faults.png](docs/screenshot-mock-faults.png)
+![PinGuard im Mock-Modus mit Überstrom an Pin 3](docs/screenshot.png)
 
 ## Anzeige
 
@@ -27,7 +25,7 @@ Bedienung:
 - **Klick auf die Statuszeile oder den Verbindungspunkt:** gelatchte Fehler zurücksetzen
 - **Doppelklick:** Peaks zurücksetzen (Pin-Peaks und Peak der Steckerleistung)
 - **Rechtsklick:** Menü mit Peaks/Fehler zurücksetzen, *Grenzen und Alarme …*, *Immer im Vordergrund*, *In den Infobereich minimieren*, *Mit Windows starten*, *Sprache*, *Ereignis-Log* (*Alarme aufzeichnen*, *Ordner öffnen*), Beenden
-- Position, Größe, *Immer im Vordergrund*, Infobereich, Ereignis-Log, Sprache, Grenzwerte und Alarme werden in `%APPDATA%\GpuMon\gpumon.ini` gespeichert.
+- Position, Größe, *Immer im Vordergrund*, Infobereich, Ereignis-Log, Sprache, Grenzwerte und Alarme werden in `%APPDATA%\PinGuard\pinguard.ini` gespeichert.
 - Es läuft nur eine Instanz. Ein zweiter Start holt das vorhandene Fenster nach vorn (auch aus dem Infobereich).
 
 ### Infobereich (Tray)
@@ -43,14 +41,14 @@ wird das Symbol neu eingetragen.
 
 ### Mit Windows starten
 
-*Rechtsklick → Mit Windows starten* schreibt bzw. löscht den Wert `GpuMon` unter
+*Rechtsklick → Mit Windows starten* schreibt bzw. löscht den Wert `PinGuard` unter
 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (Pfad der laufenden EXE in Anführungszeichen).
 Das Häkchen wird bei jedem Öffnen des Menüs aus der Registry gelesen und ist nur gesetzt, wenn der
 Eintrag auf genau diese EXE zeigt. Nicht in der INI gespeichert.
 
 ### Ereignis-Log
 
-Bei jedem neu auftretenden Alarm hängt GpuMon eine Zeile an `%APPDATA%\GpuMon\events.csv` an (INI
+Bei jedem neu auftretenden Alarm hängt PinGuard eine Zeile an `%APPDATA%\PinGuard\events.csv` an (INI
 `event_log` = 0/1, Standard 1; Menü *Ereignis-Log → Alarme aufzeichnen*). Spalten: `time` (ISO, lokale
 Zeit), `alarm` (`alarm1`, `alarm2`, `overcurrent`, `imbalance`, `nodata`), `c1_pin1_a` … `c2_pin6_a`,
 `v12_v`, `connector_w`. Trennzeichen Semikolon, Dezimalpunkt, unabhängig von der Sprache; fehlende
@@ -104,22 +102,22 @@ Je Alarm (`alarm1`, `alarm2`, `overcurrent`, `imbalance`, `nodata`) gibt es vier
 **Ton** (`_sound`: Warnton beim Auftreten) und **Zeigen** (`_show`: Fenster wiederherstellen, ohne Fokuswechsel nach vorne holen und in der Taskleiste blinken).
 Standard: alle aktiv und haltend, ohne Ton und ohne Zeigen. Ungültige Grenzwerte in der INI werden ignoriert, dann gelten die Standardwerte.
 
-Kommandozeile: `gpumon.exe [--mock] [--topmost] [--mahm-name NAME]`
+Kommandozeile: `pinguard.exe [--mock] [--topmost] [--mahm-name NAME]`
 - `--mock` erzeugt Fake-Daten (Rampe bis Rot, Schieflast, Alarm, 5 s „offline“) zum Testen ohne Hardware.
 - `--mahm-name` liest eine andere Shared-Memory-Section, nur für Tests.
 
 ## Voraussetzungen
 
 MSI Afterburner (getestet: 4.6.7) mit dem mitgelieferten PSU-Plugin
-(`Plugins\Monitoring\PSU.dll`), das das Netzteil per USB ausliest. GpuMon liest
+(`Plugins\Monitoring\PSU.dll`), das das Netzteil per USB ausliest. PinGuard liest
 Afterburners Shared Memory `MAHMSharedMemory` nur lesend aus und sucht die
 Quellen per Name (`PSU 12VHPWR1_1 current` …). Die Reihenfolge, in der die
 Quellen in Afterburner aktiviert sind, spielt deshalb keine Rolle.
 
-Läuft Afterburner nicht, zeigt GpuMon einen Hinweis. Alle 2 s wird erneut
+Läuft Afterburner nicht, zeigt PinGuard einen Hinweis. Alle 2 s wird erneut
 versucht zu verbinden. Wenn Afterburner sich beendet (Signatur `0xDEAD`) oder
 der Zeitstempel 10 s lang stehen bleibt (Afterburner abgestürzt oder hängt),
-gibt GpuMon das Mapping frei und verbindet sich neu.
+gibt PinGuard das Mapping frei und verbindet sich neu.
 
 Hinweis zu den Werten: `PSU power` ist die **DC-Leistung der 12-V-Schiene**
 (12V current × 12V voltage), nicht die Aufnahme an der Steckdose. Die
@@ -131,10 +129,13 @@ AC-Aufnahme beträgt ungefähr PSU DC ÷ Effizienz.
 cargo build --release
 ```
 
-Das Ergebnis ist `target\release\gpumon.exe` (~190 KB, statisch gelinkt, ohne Runtime und ohne Konsolenfenster).
+Das Anwendungssymbol liegt in `assets/pinguard.ico` und wird von `build.rs` ohne Ressourcen-Compiler
+eingebunden. Neu erzeugen: `python assets/make_icon.py`.
+
+Das Ergebnis ist `target\release\pinguard.exe` (~340 KB inkl. Symbol, statisch gelinkt, ohne Runtime und ohne Konsolenfenster).
 Tests: `cargo test` (Modell inkl. Verlauf und Alarm-Gedächtnis, MAHM-Parsing gegen Byte-Puffer, Einstellungen, CSV-Zeilen,
 Tray-Symbolbild, Autostart-Kommandozeile, Tooltips und Textbreiten je Sprache). Die Tests schreiben weder in
-`%APPDATA%\GpuMon` noch in die Registry oder den Infobereich (CSV-Test nur im Temp-Ordner).
+`%APPDATA%\PinGuard` noch in die Registry oder den Infobereich (CSV-Test nur im Temp-Ordner).
 
 ## Technik und Entscheidungen
 
@@ -142,7 +143,7 @@ Tray-Symbolbild, Autostart-Kommandozeile, Tooltips und Textbreiten je Sprache). 
   rahmenlos (`WM_NCCALCSIZE`), mit Windows-11-Ecken, Per-Monitor-DPI v2 und skalierendem
   Layout (Basisraster 440 × 196 DIPs).
 - **Gezeichnet wird mit GDI/GDI+, nicht mit Direct2D.** Ursprünglich war Direct2D
-  vorgesehen (siehe HANDOVER). Gemessen hat sich gezeigt: Direct2D lädt auch im
+  vorgesehen. Gemessen hat sich gezeigt: Direct2D lädt auch im
   Software-Modus D3D11/WARP. Daraufhin hängt sich **RTSS** (samt NVAPI) in den
   Prozess ein, wie in jede D3D-Anwendung. Ergebnis: 43 MB Working Set, 74 MB
   privat, 21 Threads. Mit GDI+ (geglättete Formen) und GDI-ClearType-Text in
@@ -174,7 +175,6 @@ src/
   source/mod.rs    trait PsuSource
   source/mahm.rs   Afterburner-Shared-Memory (Parsing + Verbindung)
   source/mock.rs   Fake-Daten
-rtss/              RTSS-Overlays (*.ovl) und ihre Generatoren (nicht Teil der App)
 ```
 
 ## Gemessener Verbrauch
