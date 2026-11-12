@@ -150,6 +150,8 @@ pub struct Texts {
     pub st_active: &'static str,
     pub st_latched: &'static str,
     pub st_ok: &'static str,
+    /// Verbindung war unterbrochen (gehalten)
+    pub link_latched: &'static str,
     pub tip_psu_w: &'static str,
     pub tip_eff: &'static str,
     pub tip_temp: &'static str,
@@ -219,6 +221,7 @@ static DE: Texts = Texts {
     st_active: "Jetzt aktiv.",
     st_latched: "War ausgelöst – Klick setzt zurück.",
     st_ok: "In Ordnung.",
+    link_latched: "War unterbrochen – Klick setzt zurück.",
     tip_psu_w: "Gesamte Ausgangsleistung des Netzteils (DC-Seite)",
     tip_eff: "Vom Netzteil gemeldeter Wirkungsgrad",
     tip_temp: "Temperatur im Netzteil",
@@ -284,7 +287,7 @@ static EN: Texts = Texts {
     connector: "Connector",
     head_conn: "CONNECTOR",
     head_psu: "PSU",
-    chips: ["ALARM C1", "ALARM C2", "OVERCURR.", "IMBALANCE", "LINK"],
+    chips: ["ALARM C1", "ALARM C2", "OVERCURRENT", "IMBALANCE", "LINK"],
     lbl_power: "Power",
     lbl_sum: "Σ Amps",
     lbl_max: "Max",
@@ -304,6 +307,7 @@ static EN: Texts = Texts {
     st_active: "Active now.",
     st_latched: "Was triggered – click to reset.",
     st_ok: "OK.",
+    link_latched: "Was interrupted – click to reset.",
     tip_psu_w: "Total PSU output power (DC side)",
     tip_eff: "Efficiency reported by the PSU",
     tip_temp: "Temperature inside the PSU",
@@ -394,6 +398,16 @@ pub fn fault_imbalance_pct(p: &str) -> String {
 
 pub fn fault_nodata(source: &str) -> String {
     pick(format!("Verbindung: keine Netzteil-Daten von {source}"), format!("Link: no PSU data from {source}"))
+}
+
+/// Verbindungspunkt, wenn Daten ankommen.
+pub fn link_ok(source: &str) -> String {
+    pick(format!("Verbindung: Netzteil-Daten kommen von {source}"), format!("Link: receiving PSU data from {source}"))
+}
+
+/// Verbindungspunkt bei abgeschaltetem Alarm.
+pub fn link_about(source: &str) -> String {
+    pick(format!("Verbindung zu {source}"), format!("Link to {source}"))
 }
 
 /// Rote Linie im Balken-Panel.
@@ -530,7 +544,7 @@ mod tests {
         assert_eq!(t().chips[2], "ÜBERSTROM");
         assert_eq!(not_running("Afterburner"), "Afterburner läuft nicht");
         set_lang(Lang::En);
-        assert_eq!(t().chips[2], "OVERCURR.");
+        assert_eq!(t().chips[2], "OVERCURRENT");
         assert_eq!(not_running("Afterburner"), "Afterburner not running");
         // Englische Tabelle ohne Umlaute/ß (Hinweis auf vergessene Übersetzung)
         let all = [EN.chips.as_slice(), EN.limit_rows.as_slice(), EN.fault_titles.as_slice(), EN.metric_titles.as_slice()].concat();

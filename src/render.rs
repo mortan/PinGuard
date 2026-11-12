@@ -150,9 +150,28 @@ fn metric_layout(cfg: &Config) -> MetricLayout {
     out
 }
 
-/// Die angezeigten Statusfelder mit Beschriftung und Fläche.
+/// Mittelpunkt des Verbindungspunkts: am Ende der Netzteil-Überschrift;
+/// ist die Gruppe ausgeblendet, an der verbleibenden Überschrift, ohne
+/// Kennzahlen oben rechts im Panel.
+fn link_pos(cfg: &Config) -> (f32, f32) {
+    let y = metric_layout(cfg).heads.last().map_or(16.5, |(_, r)| (r.top + 1.0 + r.bottom) / 2.0 + 0.5);
+    (422.5, y)
+}
+
+/// Liegt der Punkt (Basiskoordinaten) auf der Verbindungsanzeige? Bei
+/// aktivem Ausfall gehört der Text links vom Punkt dazu.
+pub fn link_hit(x: f32, y: f32, cfg: &Config, monitor: &Monitor) -> bool {
+    let (cx, cy) = link_pos(cfg);
+    let shows_text = cfg.alarm(Fault::NoData).enabled && monitor.fault(Fault::NoData).active;
+    let left = cx - if shows_text { 62.0 } else { 7.0 };
+    (left..=cx + 7.0).contains(&x) && (cy - 6.0..=cy + 6.0).contains(&y)
+}
+
+/// Die angezeigten Statusfelder mit Beschriftung und Fläche. Die Verbindung
+/// zur Datenquelle gehört nicht dazu, sie hat ihren Punkt im Kennzahlen-Panel.
 fn visible_chips(v: &View) -> Vec<(Fault, &'static str, R)> {
-    let chips: Vec<_> = FAULTS.iter().filter(|f| v.monitor.show_fault(**f)).map(|f| (*f, t().chips[*f as usize])).collect();
+    let chips: Vec<_> =
+        FAULTS.iter().filter(|f| **f != Fault::NoData && v.monitor.show_fault(**f)).map(|f| (*f, t().chips[*f as usize])).collect();
     let gap = 5.0;
     let n = chips.len() as f32;
     let cw = (STATUS_X1 - STATUS_X0 - gap * (n - 1.0)) / n;
@@ -190,7 +209,7 @@ pub fn hint_at(x: f32, y: f32, v: &View) -> Option<Hint> {
                 ImbalanceMode::Amps => i18n::fault_imbalance_amps(&short(lim.imbalance_a)),
                 ImbalanceMode::Percent => i18n::fault_imbalance_pct(&short(lim.imbalance_pct)),
             },
-            Fault::NoData => i18n::fault_nodata(v.source_name),
+            Fault::NoData => return None,
         };
         let st = v.monitor.fault(fault);
         let state = if !v.config.alarm(fault).enabled {
@@ -203,6 +222,21 @@ pub fn hint_at(x: f32, y: f32, v: &View) -> Option<Hint> {
             t().st_ok
         };
         return hint(300 + fault as u32, format!("{what}\n{state}"));
+    }
+
+    // Verbindungspunkt
+    if link_hit(x, y, v.config, v.monitor) {
+        let st = v.monitor.fault(Fault::NoData);
+        let text = if !v.config.alarm(Fault::NoData).enabled {
+            format!("{}\n{}", i18n::link_about(v.source_name), t().st_disabled)
+        } else if st.active {
+            format!("{}\n{}", i18n::fault_nodata(v.source_name), t().st_active)
+        } else if st.latched {
+            format!("{}\n{}", i18n::link_ok(v.source_name), t().link_latched)
+        } else {
+            i18n::link_ok(v.source_name)
+        };
+        return hint(300 + Fault::NoData as u32, text);
     }
 
     let Reading::Data(snap) = v.reading else { return None };
@@ -557,6 +591,7 @@ impl Painter<'_> {
 
         self.draw_bars(v, stats.as_ref(), &vis[..nvis]);
         self.draw_metrics(v.config, snap, stats.as_ref(), &vis[..nvis]);
+        self.draw_link(v);
         self.draw_status(v);
 
         // Hinweis bei fehlenden Daten über dem Balken-Panel
@@ -757,6 +792,34 @@ impl Painter<'_> {
         }
     }
 
+    /// Verbindung zur Datenquelle: kleiner Punkt am Ende der Überschrift.
+    /// Grün = Daten kommen, rot mit Text = Ausfall, orange Ring = war
+    /// unterbrochen (gehalten), blass = Alarm abgeschaltet.
+    fn draw_link(&self, v: &View) {
+        let (cx, cy) = link_pos(v.config);
+        let st = v.monitor.fault(Fault::NoData);
+        let dot = |r: f32, c: u32, a: f32| self.fill_round(rect(cx - r, cy - r, cx + r, cy + r), r, c, a);
+        // Überschriftenlinie unter Punkt (und Text) freistellen
+        let clear = |left: f32| self.fill(rect(left, cy - 3.5, 430.0, cy + 3.5), PANEL, 1.0);
+        if !v.config.alarm(Fault::NoData).enabled {
+            clear(cx - 6.5);
+            dot(2.2, FAINT, 1.0);
+        } else if st.active {
+            let txt = t().no_data;
+            let right = cx - 7.0;
+            clear(right - self.text_width(txt, F::Tiny) - 5.0);
+            dot(2.6, RED, 1.0);
+            self.text(txt, F::Tiny, rect(right - 56.0, cy - 6.5, right, cy + 5.5), Align::Right, RED, 1.0);
+        } else if st.latched {
+            clear(cx - 7.0);
+            dot(3.0, AMBER, 1.0);
+            dot(1.8, PANEL, 1.0);
+        } else {
+            clear(cx - 6.5);
+            dot(2.2, GREEN, 0.9);
+        }
+    }
+
     fn draw_status(&self, v: &View) {
         for (f, label, r) in visible_chips(v) {
             let st = v.monitor.fault(f);
@@ -827,9 +890,22 @@ mod tests {
         let none = Config { show: [false; METRIC_COUNT], ..cfg };
         let vn = View { reading: &reading, monitor: &mon, config: &none, source_name: "Test" };
         assert!(hint_at(250.0, 58.0, &vn).is_none() && hint_at(250.0, 150.0, &vn).is_none());
-        // Statuszeile: ALARM S2 ist ausgeblendet, vier Felder
+        // Statuszeile: ALARM S2 ist ausgeblendet, die Verbindung hat ihren
+        // eigenen Punkt, bleiben drei Felder
         assert!(hint_at(60.0, 178.0, &v).unwrap().text.ends_with("In Ordnung."));
-        assert_eq!(hint_at(420.0, 178.0, &v).unwrap().id, 300 + Fault::NoData as u32);
+        assert_eq!(hint_at(420.0, 178.0, &v).unwrap().id, 300 + Fault::Imbalance as u32);
+        // Verbindungspunkt am Ende der Netzteil-Überschrift
+        let link = hint_at(422.0, 77.0, &v).unwrap();
+        assert_eq!(link.id, 300 + Fault::NoData as u32);
+        assert_eq!(link.text, "Verbindung: Netzteil-Daten kommen von Test");
+        assert!(hint_at(400.0, 77.0, &v).is_none()); // Text nur bei Ausfall
+        // ohne Netzteil-Gruppe an der Stecker-Überschrift, ohne Kennzahlen oben rechts
+        let mut no_psu = cfg;
+        for m in PSU_METRICS {
+            no_psu.show[m as usize] = false;
+        }
+        assert!(link_hit(422.0, 17.0, &no_psu, &mon) && !link_hit(422.0, 77.0, &no_psu, &mon));
+        assert!(link_hit(422.0, 16.5, &none, &mon));
         // zwischen den Panels und außerhalb: nichts
         assert!(hint_at(209.0, 100.0, &v).is_none());
         assert!(hint_at(-5.0, 100.0, &v).is_none());
@@ -839,6 +915,16 @@ mod tests {
         let v = View { reading: &off, monitor: &mon, config: &cfg, source_name: "Test" };
         assert!(hint_at(88.0, 100.0, &v).is_none());
         assert!(hint_at(420.0, 178.0, &v).is_some());
+        // Ausfall: Punkt samt Text ist aktiv, danach gehalten bis zum Zurücksetzen
+        mon.update(None, &cfg);
+        let v = View { reading: &off, monitor: &mon, config: &cfg, source_name: "Test" };
+        assert!(hint_at(400.0, 77.0, &v).unwrap().text.ends_with("Jetzt aktiv."));
+        mon.update(Some(&snapshot()), &cfg);
+        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test" };
+        assert!(hint_at(422.0, 77.0, &v).unwrap().text.ends_with("Klick setzt zurück."));
+        mon.clear_faults();
+        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test" };
+        assert!(!hint_at(422.0, 77.0, &v).unwrap().text.contains('\n'));
     }
 
     #[test]
@@ -856,7 +942,8 @@ mod tests {
         assert!(hint_at(250.0, 150.0, &v).unwrap().text.starts_with("12 V rail"));
         let ok = hint_at(60.0, 178.0, &v).unwrap().text;
         assert!(ok.starts_with("PSU alarm connector 1") && ok.ends_with("\nOK."), "{ok}");
-        assert!(hint_at(420.0, 178.0, &v).unwrap().text.starts_with("Link: no PSU data from Test"));
+        assert!(hint_at(420.0, 178.0, &v).unwrap().text.starts_with("Imbalance"));
+        assert_eq!(hint_at(422.0, 77.0, &v).unwrap().text, "Link: receiving PSU data from Test");
         // gleiche Bereiche wie auf Deutsch
         i18n::set_lang(i18n::Lang::De);
         assert_eq!(hint_at(380.0, 118.0, &v).unwrap().id, 200 + Metric::Fan as u32);
@@ -892,15 +979,17 @@ mod tests {
             };
             let (de_chips, de_labels) = texts(i18n::Lang::De);
             let (en_chips, en_labels) = texts(i18n::Lang::En);
-            // Alle fünf Statusfelder sichtbar: schmalste Breite; Punkt + Abstand 9.
-            let chip_w = (STATUS_X1 - STATUS_X0 - 4.0 * 5.0) / 5.0;
-            // Nicht mehr Zeichen als deutsch; gemessen höchstens eine Spur
-            // breiter (ALARM C1 / IMBALANCE: < 1 Basiseinheit wegen C bzw. M).
-            for (d, e) in de_chips.iter().zip(en_chips) {
-                let (wd, we) = (width(d, F::Chip), width(e, F::Chip));
-                assert!(e.chars().count() <= d.chars().count(), "Chip {e} länger als {d}");
-                assert!(we <= wd + 1.5, "Chip {e} ({we}) breiter als {d} ({wd})");
-                assert!(we + 9.0 <= chip_w, "Chip {e} passt nicht ({we})");
+            // Alle vier Statusfelder sichtbar (die Verbindung hat keins):
+            // schmalste Breite; Punkt + Abstand 9, dazu etwas Rand.
+            let chip_w = (STATUS_X1 - STATUS_X0 - 3.0 * 5.0) / 4.0;
+            for c in de_chips.iter().chain(&en_chips) {
+                let w = width(c, F::Chip);
+                assert!(w + 9.0 + 12.0 <= chip_w, "Chip {c} passt nicht ({w})");
+            }
+            // Text neben dem Verbindungspunkt bleibt in der Klickfläche
+            for l in [i18n::Lang::De, i18n::Lang::En] {
+                i18n::set_lang(l);
+                assert!(width(t().no_data, F::Tiny) <= 55.0);
             }
             // Label-Bereich: x + 9 … x + 60
             for (d, e) in de_labels.iter().zip(en_labels) {

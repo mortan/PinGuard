@@ -241,6 +241,7 @@ unsafe fn app<'a>(hwnd: HWND) -> Option<&'a mut App> {
 fn in_status(app: &App, x: i32, y: i32) -> bool {
     let (bx, by) = app.renderer.to_base(x, y);
     (render::STATUS_X0..=render::STATUS_X1).contains(&bx) && (render::STATUS_Y0..=render::STATUS_Y1).contains(&by)
+        || render::link_hit(bx, by, &app.settings.config, &app.monitor)
 }
 
 /// Sprache der Oberfläche nach Windows-Anzeigesprache.

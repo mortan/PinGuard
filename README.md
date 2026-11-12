@@ -16,11 +16,12 @@ Mock-Modus mit Schieflast, Alarm und gelatchtem Überstrom: [docs/screenshot-moc
 | Balken links | 6 Pins des aktiven Steckers. Ampel (Standard, einstellbar): grün < 8 A, gelb 8–9,2 A, rot ≥ 9,2 A. Vollausschlag 12 A, rote Linie an der Rot-Grenze, gelbe Linie an der Gelb-Grenze, Strich = Peak seit Start/Reset. Stecker 2 erscheint nur, wenn er Strom führt. |
 | Kennzahlen rechts | Zwei Gruppen. **Stecker:** Leistung (Σ Pins × gemessene 12 V), Σ Strom, Max-Pin, Schieflast (Δ Pins in A oder Abw. in %, je nach Messart). **Netzteil:** DC-Leistung, Effizienz, Temperatur, Lüfter. Zusätzlich einblendbar: Auslastung (bezogen auf die Nennleistung je Stecker) und GPU-Board-Power (Afterburner `Power`). |
 | Rails | 12 V / 5 V / 3,3 V: Spannung und Strom (ausblendbar) |
-| Statuszeile | ALARM S1/S2 (Alarm-Flag, das das Netzteil selbst je Stecker meldet), ÜBERSTROM (Pin ≥ Rot-Grenze), SCHIEFLAST (Grenze in A oder %, siehe unten; Standard 3 A), VERBINDUNG. **Rot** = aktiv, **orange umrandet** = war aktiv (gelatcht), blass = abgeschaltet. ALARM S2 erscheint erst, wenn Stecker 2 seit dem Start Strom geführt hat oder sein Alarm auslöst. |
+| Verbindung | Kleiner Punkt am Ende der Überschrift „NETZTEIL“: grün = Daten kommen, rot mit „keine Daten“ = Verbindung zur Datenquelle weg, orange Ring = war unterbrochen (Klick setzt zurück), blass = Alarm abgeschaltet. |
+| Statuszeile | ALARM S1/S2 (Alarm-Flag, das das Netzteil selbst je Stecker meldet), ÜBERSTROM (Pin ≥ Rot-Grenze), SCHIEFLAST (Grenze in A oder %, siehe unten; Standard 3 A). **Rot** = aktiv, **orange umrandet** = war aktiv (gelatcht), blass = abgeschaltet. ALARM S2 erscheint erst, wenn Stecker 2 seit dem Start Strom geführt hat oder sein Alarm auslöst. |
 
 Bedienung:
 - Fenster an beliebiger Stelle ziehen. Größe an den Rändern ändern, das Seitenverhältnis bleibt dabei erhalten.
-- **Klick auf die Statuszeile:** gelatchte Fehler zurücksetzen
+- **Klick auf die Statuszeile oder den Verbindungspunkt:** gelatchte Fehler zurücksetzen
 - **Doppelklick:** Peaks zurücksetzen
 - **Rechtsklick:** Menü mit Peaks/Fehler zurücksetzen, *Grenzen und Alarme …*, *Immer im Vordergrund*, *Sprache*, Beenden
 - Position, Größe, *Immer im Vordergrund*, Sprache, Grenzwerte und Alarme werden in `%APPDATA%\GpuMon\gpumon.ini` gespeichert.
@@ -33,7 +34,7 @@ Windows-Anzeigesprache Deutsch ist (alle Regionen), sonst Englisch. Über *Recht
 lässt sich *Automatisch (Windows)*, *Deutsch* oder *English* fest wählen; das wirkt sofort, ohne
 Neustart. INI-Schlüssel `lang` = `auto` / `de` / `en` (fehlt er, gilt `auto`). Zahlen erscheinen
 im Format der Sprache (Deutsch `9,2 A`, Englisch `9.2 A`). Im Einstellungsdialog werden Komma und
-Punkt immer akzeptiert. Englische Kurzformen: Statusfelder ALARM C1/C2, OVERCURR., IMBALANCE, LINK;
+Punkt immer akzeptiert. Englische Kurzformen: Statusfelder ALARM C1/C2, OVERCURRENT, IMBALANCE;
 Kennzahlen u. a. „Σ Amps“, „Dev.“, „Eff.“.
 
 ### Grenzen und Alarme
