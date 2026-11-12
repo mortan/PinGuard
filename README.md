@@ -110,7 +110,7 @@ Settings are stored in `%APPDATA%\PinGuard\pinguard.ini`.
 
 | Area | Content |
 |---|---|
-| Pin bars | The 6 pins of the active connector. Green below 8 A, yellow from 8 A, red from 9.2 A (the 12V-2x6 per-pin limit). A small line marks each pin's peak. An optional dashed line shows the pin average. Connector 2 only appears once it carries current. |
+| Pin bars | The 6 pins of the active connector. Green below 8.5 A, yellow from 8.5 A, red from 9.2 A (the 12V-2x6 per-pin limit). At 600 W spread evenly, each pin carries 8.33 A, so a healthy connector stays green; yellow means a pin carries clearly more than its share. A small line marks each pin's peak. An optional dashed line shows the pin average. Connector 2 only appears once it carries current. |
 | Connector | Power, total current, highest pin, imbalance. Optional: load relative to 600 W and GPU board power. |
 | PSU | DC output power, efficiency, temperature, fan speed. Can be replaced by a **2-minute history chart** of connector power. |
 | Rails | 12 V / 5 V / 3.3 V voltage and current. |
@@ -163,7 +163,7 @@ Right-click → *Limits and alarms …* (changes apply immediately):
 
 | Setting | Default |
 |---|---|
-| Pin yellow from | 8 A |
+| Pin yellow from | 8.5 A |
 | Pin red / overcurrent from | 9.2 A |
 | Bar full scale | 12 A |
 | Imbalance measured as | percent |

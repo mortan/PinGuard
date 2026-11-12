@@ -57,7 +57,9 @@ impl ImbalanceMode {
 impl Default for Limits {
     fn default() -> Self {
         Limits {
-            pin_warn_a: 8.0,
+            // 600 W gleichmäßig verteilt sind 8,33 A je Pin: bis dahin grün,
+            // gelb erst, wenn ein Pin deutlich mehr als seinen Anteil trägt.
+            pin_warn_a: 8.5,
             pin_limit_a: 9.2,
             full_scale_a: 12.0,
             imbalance_mode: ImbalanceMode::Percent,
@@ -895,8 +897,8 @@ mod tests {
 
     #[test]
     fn levels() {
-        assert_eq!(Limits::default().pin_level(7.99), 0);
-        assert_eq!(Limits::default().pin_level(8.0), 1);
+        assert_eq!(Limits::default().pin_level(8.33), 0); // 600 W gleichmäßig
+        assert_eq!(Limits::default().pin_level(8.5), 1);
         assert_eq!(Limits::default().pin_level(9.19), 1);
         assert_eq!(Limits::default().pin_level(9.2), 2);
     }

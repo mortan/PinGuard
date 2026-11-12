@@ -13,8 +13,9 @@ Measured (release build, live data, game at ~500 W GPU load, 120 s): 14.2 MB wor
 private, 0.03 % total CPU (16 logical CPUs), 4 threads, no GPU engine usage. The first Direct2D
 version used 43 MB WS, 74 MB private, 21 threads. Re-measure after changes to drawing or polling.
 
-Thresholds: 12V-2x6 spec allows 9.2 A per pin (≈ 8.3 A/pin at 600 W). Default colors: green < 8 A,
-yellow 8–9.2 A, red ≥ 9.2 A, full scale 12 A.
+Thresholds: 12V-2x6 spec allows 9.2 A per pin (≈ 8.3 A/pin at 600 W). Default colors: green < 8.5 A,
+yellow 8.5–9.2 A, red ≥ 9.2 A, full scale 12 A. Imbalance defaults to percent (30 % above 20 A);
+sound is on by default for overcurrent and the PSU alarms.
 
 ## Build and test
 
