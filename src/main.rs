@@ -10,6 +10,7 @@
 mod model;
 mod render;
 mod settings;
+mod settings_dlg;
 mod source;
 
 use model::Monitor;
@@ -21,6 +22,7 @@ use windows::core::{w, Result, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Dwm::*;
 use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::HiDpi::*;
@@ -31,6 +33,7 @@ const CMD_RESET_PEAKS: usize = 1;
 const CMD_RESET_FAULTS: usize = 2;
 const CMD_TOPMOST: usize = 3;
 const CMD_EXIT: usize = 4;
+const CMD_SETTINGS: usize = 5;
 const CLASS: PCWSTR = w!("GpuMonWindow");
 
 struct App {
@@ -47,11 +50,48 @@ impl App {
         let r = self.source.poll();
         if r != self.reading {
             self.reading = r;
-            self.monitor.update(match &self.reading {
-                Reading::Data(s) => Some(s),
-                _ => None,
-            });
+            let raised = self.update_monitor();
+            self.signal(hwnd, raised);
             self.invalidate(hwnd);
+        }
+    }
+
+    /// Wertet den aktuellen Stand mit der aktuellen Konfiguration aus.
+    fn update_monitor(&mut self) -> [bool; model::FAULT_COUNT] {
+        let snap = match &self.reading {
+            Reading::Data(s) => Some(s),
+            _ => None,
+        };
+        self.monitor.update(snap, &self.settings.config)
+    }
+
+    /// Ton bzw. Fenster nach vorne für neu aufgetretene Alarme.
+    fn signal(&mut self, hwnd: HWND, raised: [bool; model::FAULT_COUNT]) {
+        let cfg = &self.settings.config;
+        let any = |pick: fn(&model::AlarmCfg) -> bool| raised.iter().zip(&cfg.alarms).any(|(r, a)| *r && pick(a));
+        unsafe {
+            if any(|a| a.sound) {
+                let _ = MessageBeep(MB_ICONWARNING);
+            }
+            if any(|a| a.show) {
+                if IsIconic(hwnd).as_bool() {
+                    let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                }
+                // Nach vorne, ohne dem Spiel den Fokus zu nehmen.
+                if !self.settings.topmost {
+                    let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+                    let _ = SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags);
+                    let _ = SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+                }
+                let fi = FLASHWINFO {
+                    cbSize: std::mem::size_of::<FLASHWINFO>() as u32,
+                    hwnd,
+                    dwFlags: FLASHW_ALL | FLASHW_TIMERNOFG,
+                    uCount: 0,
+                    dwTimeout: 0,
+                };
+                let _ = FlashWindowEx(&fi);
+            }
         }
     }
 
@@ -105,6 +145,7 @@ unsafe fn show_menu(hwnd: HWND, app: &mut App, mut pt: POINT) {
     let Ok(menu) = CreatePopupMenu() else { return };
     let _ = AppendMenuW(menu, MF_STRING, CMD_RESET_PEAKS, w!("Peaks zurücksetzen\tDoppelklick"));
     let _ = AppendMenuW(menu, MF_STRING, CMD_RESET_FAULTS, w!("Fehler zurücksetzen\tKlick auf Status"));
+    let _ = AppendMenuW(menu, MF_STRING, CMD_SETTINGS, w!("Grenzen und Alarme …"));
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
     let top = if app.settings.topmost { MF_CHECKED } else { MF_UNCHECKED };
     let _ = AppendMenuW(menu, MF_STRING | top, CMD_TOPMOST, w!("Immer im Vordergrund"));
@@ -128,6 +169,16 @@ unsafe fn show_menu(hwnd: HWND, app: &mut App, mut pt: POINT) {
             let _ = SetWindowPos(hwnd, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             app.settings.save();
         }
+        CMD_SETTINGS => {
+            if let Some(c) = settings_dlg::edit(hwnd, app.settings.config) {
+                app.settings.config = c;
+                app.settings.save();
+                // Neu auswerten (z. B. abgeschaltete Alarme verschwinden sofort),
+                // aber keinen Ton für bereits bestehende Zustände.
+                app.update_monitor();
+                app.invalidate(hwnd);
+            }
+        }
         CMD_EXIT => {
             let _ = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
         }
@@ -147,7 +198,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 let mut ps = PAINTSTRUCT::default();
                 let dc = BeginPaint(hwnd, &mut ps);
                 let (w, h) = client_size(hwnd);
-                let view = View { reading: &app.reading, monitor: &app.monitor, source_name: app.source.name() };
+                let view = View { reading: &app.reading, monitor: &app.monitor, config: &app.settings.config, source_name: app.source.name() };
                 app.renderer.render(dc, w, h, &view);
                 let _ = EndPaint(hwnd, &ps);
                 LRESULT(0)
@@ -339,7 +390,7 @@ fn main() -> Result<()> {
             minimized: false,
         });
         app.renderer.set_dpi(GetDpiForWindow(hwnd));
-        app.monitor.update(None);
+        app.update_monitor();
         app.tick(hwnd);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(app) as isize);
 

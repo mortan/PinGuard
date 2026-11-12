@@ -52,8 +52,8 @@ fn colorref(c: u32, a: f32) -> COLORREF {
     COLORREF(mix(16) | mix(8) << 8 | mix(0) << 16)
 }
 
-fn level_color(a: f32) -> u32 {
-    match pin_level(a) {
+fn level_color(l: &Limits, a: f32) -> u32 {
+    match l.pin_level(a) {
         0 => GREEN,
         1 => YELLOW,
         _ => RED,
@@ -125,6 +125,7 @@ pub struct Renderer {
 pub struct View<'a> {
     pub reading: &'a Reading,
     pub monitor: &'a Monitor,
+    pub config: &'a Config,
     pub source_name: &'a str,
 }
 
@@ -347,7 +348,7 @@ impl Painter<'_> {
         self.fill_round(rect(212.0, 6.0, 434.0, 160.0), 6.0, PANEL, 1.0);
 
         self.draw_bars(v, stats.as_ref(), &vis[..nvis]);
-        self.draw_metrics(snap, stats.as_ref(), &vis[..nvis]);
+        self.draw_metrics(&v.config.limits, snap, stats.as_ref(), &vis[..nvis]);
         self.draw_status(v);
 
         // Hinweis bei fehlenden Daten über dem Balken-Panel
@@ -366,7 +367,9 @@ impl Painter<'_> {
     fn draw_bars(&self, v: &View, stats: Option<&[ConnectorStats; 2]>, vis: &[usize]) {
         let (top, bottom) = (30.0, 124.0);
         let h = bottom - top;
-        let y_of = |a: f32| bottom - (a.clamp(0.0, PIN_FULL_SCALE_A) / PIN_FULL_SCALE_A) * h;
+        let lim = &v.config.limits;
+        let fs = lim.full_scale_a;
+        let y_of = |a: f32| bottom - (a.clamp(0.0, fs) / fs) * h;
         let (x0, x1) = (14.0, 198.0);
         let compact = vis.len() == 2;
         let gap = if compact { 10.0 } else { 0.0 };
@@ -400,7 +403,7 @@ impl Painter<'_> {
                 self.fill_round(rect(bx, top, bx + bw, bottom), 2.0, TRACK, 1.0);
                 let val = st.filter(|s| s.present).map(|s| s.pins[p]);
                 if let Some(a) = val {
-                    let col = level_color(a);
+                    let col = level_color(lim, a);
                     let y = y_of(a);
                     if bottom - y > 0.5 {
                         self.fill_round(rect(bx, y, bx + bw, bottom), 2.0, col, 1.0);
@@ -415,17 +418,18 @@ impl Painter<'_> {
                 let pk = v.monitor.peaks[c][p];
                 if pk > 0.05 {
                     let y = y_of(pk);
-                    self.fill(rect(bx - 1.0, y - 1.0, bx + bw + 1.0, y + 1.0), level_color(pk), 0.55);
+                    self.fill(rect(bx - 1.0, y - 1.0, bx + bw + 1.0, y + 1.0), level_color(lim, pk), 0.55);
                 }
                 self.text(&format!("{}", p + 1), F::Label, rect(bx - 6.0, 141.0, bx + bw + 6.0, 155.0), Align::Center, FAINT, 1.0);
             }
         }
-        // 9,2-A-Grenze und 8-A-Markierung
-        let yl = y_of(PIN_LIMIT_A);
+        // Rot-Grenze (Überstrom) und Gelb-Markierung
+        let yl = y_of(lim.pin_limit_a);
         self.fill(rect(x0 - 3.0, yl - 0.6, x1 + 3.0, yl + 0.6), RED, 0.9);
-        let yw = y_of(PIN_WARN_A);
+        let yw = y_of(lim.pin_warn_a);
         self.fill(rect(x0 - 3.0, yw - 0.4, x1 + 3.0, yw + 0.4), YELLOW, 0.25);
-        self.text("9,2 A", F::Label, rect(140.0, yl - 13.0, x1 + 3.0, yl - 1.0), Align::Right, RED, 0.85);
+        let ly = yl.max(top + 12.0);
+        self.text(&format!("{} A", de(lim.pin_limit_a, 1)), F::Label, rect(140.0, ly - 13.0, x1 + 3.0, ly - 1.0), Align::Right, RED, 0.85);
     }
 
     fn cell(&self, col: usize, row: usize, label: &str, value: &str, vcol: u32) {
@@ -438,7 +442,7 @@ impl Painter<'_> {
         self.text(value, F::Value, rect(x + 30.0, y, x + 104.0, y + 24.0), Align::Right, vcol, 1.0);
     }
 
-    fn draw_metrics(&self, snap: Option<&PsuSnapshot>, stats: Option<&[ConnectorStats; 2]>, vis: &[usize]) {
+    fn draw_metrics(&self, lim: &Limits, snap: Option<&PsuSnapshot>, stats: Option<&[ConnectorStats; 2]>, vis: &[usize]) {
         let g = |i: usize| snap.and_then(|s| s.get(i));
         // Summen über die angezeigten Stecker
         let sel: Option<(f32, f32, f32, usize, usize, f32)> = stats.map(|s| {
@@ -462,7 +466,7 @@ impl Painter<'_> {
 
         let watts = sel.map(|s| s.0);
         self.cell(0, 0, "Stecker", &opt(watts, 0, "W"), ACCENT);
-        let load = watts.map(|w| w / (CONNECTOR_RATED_W * vis.len() as f32) * 100.0);
+        let load = watts.map(|w| w / (lim.connector_rated_w * vis.len() as f32) * 100.0);
         let load_col = match load {
             Some(l) if l >= 100.0 => RED,
             Some(l) if l >= 85.0 => YELLOW,
@@ -473,15 +477,15 @@ impl Painter<'_> {
         let (max_txt, max_col) = match sel {
             Some((_, _, mx, c, p, _)) => {
                 let pin = if vis.len() == 2 { format!("{}.{}", c + 1, p + 1) } else { format!("P{}", p + 1) };
-                (format!("{} A {}", de(mx, 1), pin), level_color(mx))
+                (format!("{} A {}", de(mx, 1), pin), level_color(lim, mx))
             }
             None => ("–".into(), TEXT),
         };
         self.cell(1, 1, "Max", &max_txt, max_col);
         let imb = sel.map(|s| s.5);
         let imb_col = match imb {
-            Some(d) if d >= IMBALANCE_LIMIT_A => RED,
-            Some(d) if d >= IMBALANCE_LIMIT_A * 0.5 => YELLOW,
+            Some(d) if d >= lim.imbalance_a => RED,
+            Some(d) if d >= lim.imbalance_a * 0.5 => YELLOW,
             _ => TEXT,
         };
         self.cell(0, 2, "Δ Pins", &opt(imb, 2, "A"), imb_col);
@@ -513,6 +517,7 @@ impl Painter<'_> {
             (Fault::Imbalance, "SCHIEFLAST"),
             (Fault::NoData, "VERBINDUNG"),
         ];
+        let chips: Vec<_> = chips.iter().filter(|(f, _)| v.monitor.show_fault(*f)).collect();
         let (x0, x1, gap) = (6.0, 434.0, 5.0);
         let n = chips.len() as f32;
         let cw = (x1 - x0 - gap * (n - 1.0)) / n;
@@ -520,7 +525,11 @@ impl Painter<'_> {
             let x = x0 + i as f32 * (cw + gap);
             let r = rect(x, STATUS_Y0, x + cw, STATUS_Y1);
             let st = v.monitor.fault(*f);
-            if st.active {
+            if !v.config.alarm(*f).enabled {
+                // Alarm abgeschaltet: nur blass, ohne Statuspunkt
+                self.fill_round(r, 4.0, PANEL, 1.0);
+                self.text(label, F::Chip, r, Align::Center, FAINT, 1.0);
+            } else             if st.active {
                 self.fill_round(r, 4.0, RED, 1.0);
                 self.text(label, F::Chip, r, Align::Center, 0xFFFFFF, 1.0);
             } else if st.latched {

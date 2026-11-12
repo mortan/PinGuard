@@ -13,18 +13,35 @@ Mock-Modus mit Schieflast, Alarm und gelatchtem Überstrom: [docs/screenshot-moc
 
 | Bereich | Inhalt |
 |---|---|
-| Balken links | 6 Pins des aktiven Steckers. Ampel: grün < 8 A, gelb 8–9,2 A, rot ≥ 9,2 A. Vollausschlag 12 A, rote Linie bei 9,2 A, gelbe Linie bei 8 A, Strich = Peak seit Start/Reset. Stecker 2 erscheint nur, wenn er Strom führt. |
+| Balken links | 6 Pins des aktiven Steckers. Ampel (Standard, einstellbar): grün < 8 A, gelb 8–9,2 A, rot ≥ 9,2 A. Vollausschlag 12 A, rote Linie an der Rot-Grenze, gelbe Linie an der Gelb-Grenze, Strich = Peak seit Start/Reset. Stecker 2 erscheint nur, wenn er Strom führt. |
 | Kennzahlen rechts | Stecker-Leistung (Σ Pins × gemessene 12 V), Auslastung (bezogen auf 600 W), Σ Strom, Max-Pin, Δ Pins (max − min), GPU-Board-Power (Afterburner `Power`), PSU DC, Effizienz, Temperatur, Lüfter |
 | Rails | 12 V / 5 V / 3,3 V: Spannung und Strom |
-| Statuszeile | ALARM S1/S2 (Netzteil-Alarm), ÜBERSTROM (Pin ≥ 9,2 A), SCHIEFLAST (Δ ≥ 5,5 A = `CurrentDif` des MSI-Plugins), VERBINDUNG. **Rot** = aktiv, **orange umrandet** = war aktiv (gelatcht). |
+| Statuszeile | ALARM S1/S2 (Alarm-Flag, das das Netzteil selbst je Stecker meldet), ÜBERSTROM (Pin ≥ Rot-Grenze), SCHIEFLAST (Δ ≥ Schieflast-Grenze, Standard 5,5 A = `CurrentDif` des MSI-Plugins), VERBINDUNG. **Rot** = aktiv, **orange umrandet** = war aktiv (gelatcht), blass = abgeschaltet. ALARM S2 erscheint erst, wenn Stecker 2 seit dem Start Strom geführt hat oder sein Alarm auslöst. |
 
 Bedienung:
 - Fenster an beliebiger Stelle ziehen. Größe an den Rändern ändern, das Seitenverhältnis bleibt dabei erhalten.
 - **Klick auf die Statuszeile:** gelatchte Fehler zurücksetzen
 - **Doppelklick:** Peaks zurücksetzen
-- **Rechtsklick:** Menü mit Peaks/Fehler zurücksetzen, *Immer im Vordergrund*, Beenden
-- Position, Größe und *Immer im Vordergrund* werden in `%APPDATA%\GpuMon\gpumon.ini` gespeichert.
+- **Rechtsklick:** Menü mit Peaks/Fehler zurücksetzen, *Grenzen und Alarme …*, *Immer im Vordergrund*, Beenden
+- Position, Größe, *Immer im Vordergrund*, Grenzwerte und Alarme werden in `%APPDATA%\GpuMon\gpumon.ini` gespeichert.
 - Es läuft nur eine Instanz. Ein zweiter Start holt das vorhandene Fenster nach vorn.
+
+### Grenzen und Alarme
+
+Über *Rechtsklick → Grenzen und Alarme …* (wirkt sofort, Komma oder Punkt als Dezimalzeichen):
+
+| Grenzwert | Standard | INI-Schlüssel |
+|---|---|---|
+| Pin gelb ab | 8 A | `pin_warn` |
+| Pin rot / Überstrom ab | 9,2 A | `pin_limit` |
+| Balken-Vollausschlag | 12 A | `full_scale` |
+| Schieflast (max − min) ab | 5,5 A | `imbalance` |
+| Nennleistung je Stecker (Bezug für die Auslastung) | 600 W | `rated_w` |
+
+Je Alarm (`alarm1`, `alarm2`, `overcurrent`, `imbalance`, `nodata`) gibt es vier Schalter:
+**Aktiv** (`<alarm>_on`: auswerten und anzeigen), **Halten** (`_latch`: bleibt orange markiert bis zum Klick auf die Statuszeile),
+**Ton** (`_sound`: Warnton beim Auftreten) und **Zeigen** (`_show`: Fenster wiederherstellen, ohne Fokuswechsel nach vorne holen und in der Taskleiste blinken).
+Standard: alle aktiv und haltend, ohne Ton und ohne Zeigen. Ungültige Grenzwerte in der INI werden ignoriert, dann gelten die Standardwerte.
 
 Kommandozeile: `gpumon.exe [--mock] [--topmost] [--mahm-name NAME]`
 - `--mock` erzeugt Fake-Daten (Rampe bis Rot, Schieflast, Alarm, 5 s „offline“) zum Testen ohne Hardware.
@@ -81,8 +98,9 @@ Tests: `cargo test` (Modell, MAHM-Parsing gegen Byte-Puffer, Einstellungen).
 ```
 src/
   main.rs          Fenster, Message-Loop, Timer, DPI, Hit-Test, Menü
-  settings.rs      Position/Größe/Topmost (INI)
-  model.rs         PsuSnapshot, Kennzahlen, Peaks, gelatchte Fehler, Schwellwerte
+  settings.rs      Position/Größe/Topmost, Grenzwerte, Alarme (INI)
+  settings_dlg.rs  Einstellungsdialog (Win32-Dialog aus Speichervorlage)
+  model.rs         PsuSnapshot, Kennzahlen, Peaks, Fehler, Grenzwert-/Alarm-Konfiguration
   render.rs        Layout + Zeichnen (GDI+/GDI), Farben
   source/mod.rs    trait PsuSource
   source/mahm.rs   Afterburner-Shared-Memory (Parsing + Verbindung)

@@ -1,6 +1,11 @@
-//! Fensterposition/-größe und "immer im Vordergrund" in
+//! Fensterposition/-größe, "immer im Vordergrund", Grenzwerte und Alarme in
 //! `%APPDATA%\GpuMon\gpumon.ini` (einfaches key=value).
+//!
+//! Grenzwerte: `pin_warn`, `pin_limit`, `full_scale`, `imbalance` (A) und
+//! `rated_w` (W). Alarme: je Fehlerart `<key>_on`, `<key>_latch`,
+//! `<key>_sound`, `<key>_show` (0/1), mit `<key>` aus `Fault::key`.
 
+use crate::model::{Config, FAULTS};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -8,6 +13,7 @@ pub struct Settings {
     /// Fensterrechteck in physischen Bildschirmpixeln (x, y, Breite, Höhe).
     pub rect: Option<(i32, i32, i32, i32)>,
     pub topmost: bool,
+    pub config: Config,
 }
 
 fn path() -> Option<PathBuf> {
@@ -15,21 +21,53 @@ fn path() -> Option<PathBuf> {
     Some(PathBuf::from(base).join("GpuMon").join("gpumon.ini"))
 }
 
+/// Zahl mit Punkt oder Komma.
+pub fn parse_num(v: &str) -> Option<f32> {
+    v.trim().replace(',', ".").parse().ok().filter(|f: &f32| f.is_finite())
+}
+
 impl Settings {
     pub fn parse(text: &str) -> Settings {
         let mut s = Settings::default();
         let (mut x, mut y, mut w, mut h) = (None, None, None, None);
+        let mut lim = s.config.limits;
         for line in text.lines() {
             let Some((k, v)) = line.split_once('=') else { continue };
-            let v = v.trim();
-            match k.trim() {
+            let (k, v) = (k.trim(), v.trim());
+            let num = |dst: &mut f32| {
+                if let Some(n) = parse_num(v) {
+                    *dst = n;
+                }
+            };
+            match k {
                 "x" => x = v.parse().ok(),
                 "y" => y = v.parse().ok(),
                 "w" => w = v.parse().ok(),
                 "h" => h = v.parse().ok(),
                 "topmost" => s.topmost = v == "1",
-                _ => {}
+                "pin_warn" => num(&mut lim.pin_warn_a),
+                "pin_limit" => num(&mut lim.pin_limit_a),
+                "full_scale" => num(&mut lim.full_scale_a),
+                "imbalance" => num(&mut lim.imbalance_a),
+                "rated_w" => num(&mut lim.connector_rated_w),
+                _ => {
+                    let Some((fk, attr)) = k.rsplit_once('_') else { continue };
+                    let Some(f) = FAULTS.iter().find(|f| f.key() == fk) else { continue };
+                    let a = &mut s.config.alarms[*f as usize];
+                    let on = v == "1";
+                    match attr {
+                        "on" => a.enabled = on,
+                        "latch" => a.latch = on,
+                        "sound" => a.sound = on,
+                        "show" => a.show = on,
+                        _ => {}
+                    }
+                }
             }
+        }
+        // Ungültige (z. B. von Hand verbogene) Grenzwerte → Standard.
+        if lim.validate().is_ok() {
+            s.config.limits = lim;
         }
         if let (Some(x), Some(y), Some(w), Some(h)) = (x, y, w, h) {
             if w > 50 && h > 30 {
@@ -45,6 +83,21 @@ impl Settings {
             out += &format!("x={x}\ny={y}\nw={w}\nh={h}\n");
         }
         out += &format!("topmost={}\n", self.topmost as u8);
+        let l = &self.config.limits;
+        out += "\n# Grenzwerte (A bzw. W)\n";
+        out += &format!(
+            "pin_warn={}\npin_limit={}\nfull_scale={}\nimbalance={}\nrated_w={}\n",
+            l.pin_warn_a, l.pin_limit_a, l.full_scale_a, l.imbalance_a, l.connector_rated_w
+        );
+        out += "\n# Alarme: on = auswerten, latch = halten bis Klick, sound = Warnton, show = Fenster nach vorne\n";
+        for f in FAULTS {
+            let a = self.config.alarm(f);
+            let k = f.key();
+            out += &format!(
+                "{k}_on={}\n{k}_latch={}\n{k}_sound={}\n{k}_show={}\n",
+                a.enabled as u8, a.latch as u8, a.sound as u8, a.show as u8
+            );
+        }
         out
     }
 
@@ -65,11 +118,26 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{AlarmCfg, Fault, Limits};
 
     #[test]
     fn roundtrip() {
-        let s = Settings { rect: Some((-1700, 120, 660, 294)), topmost: true };
+        let mut s = Settings { rect: Some((-1700, 120, 660, 294)), topmost: true, config: Config::default() };
+        s.config.limits = Limits { pin_warn_a: 7.5, pin_limit_a: 8.8, full_scale_a: 10.0, imbalance_a: 4.25, connector_rated_w: 450.0 };
+        s.config.alarms[Fault::Imbalance as usize] = AlarmCfg { enabled: true, latch: false, sound: true, show: true };
+        s.config.alarms[Fault::NoData as usize].enabled = false;
         assert_eq!(Settings::parse(&s.serialize()), s);
         assert_eq!(Settings::parse("garbage\nx=1"), Settings::default());
+    }
+
+    #[test]
+    fn old_ini_and_bad_values() {
+        // INI aus v1 ohne Grenzwerte → Standard
+        let s = Settings::parse("x=1\ny=2\nw=600\nh=300\ntopmost=0\n");
+        assert_eq!(s.config, Config::default());
+        // Komma erlaubt
+        assert_eq!(Settings::parse("pin_limit=9,5").config.limits.pin_limit_a, 9.5);
+        // inkonsistent (gelb > rot) → Standard
+        assert_eq!(Settings::parse("pin_warn=11\npin_limit=9").config.limits, Limits::default());
     }
 }

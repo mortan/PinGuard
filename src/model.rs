@@ -2,17 +2,99 @@
 //! gelatchte Fehler. Enthält keine Windows-Abhängigkeiten und ist vollständig
 //! per Unit-Test prüfbar.
 
-/// Ab diesem Pin-Strom wird gelb gezeichnet.
-pub const PIN_WARN_A: f32 = 8.0;
-/// 12V-2x6-Spezifikation: 9,2 A pro Pin. Ab hier rot und Überstrom-Fehler.
-pub const PIN_LIMIT_A: f32 = 9.2;
-/// Vollausschlag der Pin-Balken.
-pub const PIN_FULL_SCALE_A: f32 = 12.0;
-/// Schieflast-Grenze (max − min über die 6 Pins), entspricht `CurrentDif` des
-/// MSI-PSU-Plugins (GPU Safeguard+).
-pub const IMBALANCE_LIMIT_A: f32 = 5.5;
-/// Nennleistung eines 12V-2x6-Steckers.
-pub const CONNECTOR_RATED_W: f32 = 600.0;
+/// Konfigurierbare Grenzwerte. Die Standardwerte entsprechen den
+/// RTSS-Overlays bzw. der 12V-2x6-Spezifikation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Limits {
+    /// Ab diesem Pin-Strom wird gelb gezeichnet.
+    pub pin_warn_a: f32,
+    /// Ab hier rot und Überstrom-Fehler (Spezifikation: 9,2 A pro Pin).
+    pub pin_limit_a: f32,
+    /// Vollausschlag der Pin-Balken.
+    pub full_scale_a: f32,
+    /// Schieflast-Grenze (max − min über die 6 Pins); Standard = `CurrentDif`
+    /// des MSI-PSU-Plugins (GPU Safeguard+).
+    pub imbalance_a: f32,
+    /// Nennleistung eines Steckers (Bezug für die Auslastung).
+    pub connector_rated_w: f32,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Limits { pin_warn_a: 8.0, pin_limit_a: 9.2, full_scale_a: 12.0, imbalance_a: 5.5, connector_rated_w: 600.0 }
+    }
+}
+
+impl Limits {
+    /// Ampelfarbe eines Pin-Stroms: 0 = grün, 1 = gelb, 2 = rot.
+    pub fn pin_level(&self, a: f32) -> u8 {
+        if a >= self.pin_limit_a {
+            2
+        } else if a >= self.pin_warn_a {
+            1
+        } else {
+            0
+        }
+    }
+
+    /// Prüft die Werte; bei einem Fehler: (Feldindex, Meldung). Feldindex in
+    /// der Reihenfolge warn, limit, full_scale, imbalance, rated.
+    pub fn validate(&self) -> Result<(), (usize, &'static str)> {
+        let ok = |v: f32, lo: f32, hi: f32| v.is_finite() && v >= lo && v <= hi;
+        if !ok(self.pin_warn_a, 0.1, 50.0) {
+            return Err((0, "Gelb-Grenze muss zwischen 0,1 und 50 A liegen."));
+        }
+        if !ok(self.pin_limit_a, 0.1, 50.0) {
+            return Err((1, "Rot-Grenze muss zwischen 0,1 und 50 A liegen."));
+        }
+        if self.pin_warn_a > self.pin_limit_a {
+            return Err((0, "Gelb-Grenze darf nicht über der Rot-Grenze liegen."));
+        }
+        if !ok(self.full_scale_a, 1.0, 50.0) {
+            return Err((2, "Vollausschlag muss zwischen 1 und 50 A liegen."));
+        }
+        if !ok(self.imbalance_a, 0.1, 50.0) {
+            return Err((3, "Schieflast-Grenze muss zwischen 0,1 und 50 A liegen."));
+        }
+        if !ok(self.connector_rated_w, 50.0, 2000.0) {
+            return Err((4, "Nennleistung muss zwischen 50 und 2000 W liegen."));
+        }
+        Ok(())
+    }
+}
+
+/// Verhalten eines Alarms (einer Fehlerart der Statuszeile).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AlarmCfg {
+    /// Wird überhaupt ausgewertet und angezeigt.
+    pub enabled: bool,
+    /// Bleibt markiert, bis er per Klick zurückgesetzt wird.
+    pub latch: bool,
+    /// Warnton, sobald der Alarm auftritt.
+    pub sound: bool,
+    /// Fenster wiederherstellen/nach vorne holen und in der Taskleiste blinken.
+    pub show: bool,
+}
+
+impl Default for AlarmCfg {
+    fn default() -> Self {
+        AlarmCfg { enabled: true, latch: true, sound: false, show: false }
+    }
+}
+
+/// Gesamte fachliche Konfiguration.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Config {
+    pub limits: Limits,
+    pub alarms: [AlarmCfg; FAULT_COUNT],
+}
+
+impl Config {
+    pub fn alarm(&self, f: Fault) -> AlarmCfg {
+        self.alarms[f as usize]
+    }
+}
+
 /// Ein Stecker gilt als belegt, wenn sein Summenstrom darüber liegt.
 pub const CONNECTOR_ACTIVE_A: f32 = 0.5;
 
@@ -175,6 +257,18 @@ pub enum Fault {
     NoData = 4,
 }
 pub const FAULT_COUNT: usize = 5;
+pub const FAULTS: [Fault; FAULT_COUNT] = [Fault::Alarm1, Fault::Alarm2, Fault::OverCurrent, Fault::Imbalance, Fault::NoData];
+
+impl Fault {
+    /// Schlüssel in der INI-Datei.
+    pub fn key(self) -> &'static str {
+        ["alarm1", "alarm2", "overcurrent", "imbalance", "nodata"][self as usize]
+    }
+    /// Beschriftung im Einstellungsdialog.
+    pub fn title(self) -> &'static str {
+        ["Netzteil-Alarm Stecker 1", "Netzteil-Alarm Stecker 2", "Überstrom (Pin ≥ Rot)", "Schieflast", "Verbindung verloren"][self as usize]
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct FaultState {
@@ -188,6 +282,8 @@ pub struct FaultState {
 pub struct Monitor {
     pub peaks: [[f32; PINS]; CONNECTORS],
     pub faults: [FaultState; FAULT_COUNT],
+    /// Stecker hat seit dem Start mindestens einmal Strom geführt.
+    pub used: [bool; CONNECTORS],
     /// Einmal gültige Daten gesehen (ohne das wird "keine Daten" beim Start
     /// nicht gelatcht).
     seen_data: bool,
@@ -195,20 +291,23 @@ pub struct Monitor {
 
 impl Monitor {
     /// Übernimmt einen neuen Zustand. `snap = None` heißt: keine PSU-Daten.
-    pub fn update(&mut self, snap: Option<&PsuSnapshot>) {
+    /// Liefert die Alarme, die gerade neu aufgetreten sind (steigende Flanke).
+    pub fn update(&mut self, snap: Option<&PsuSnapshot>, cfg: &Config) -> [bool; FAULT_COUNT] {
+        let lim = &cfg.limits;
         let mut active = [false; FAULT_COUNT];
         match snap {
             Some(s) if s.has_psu() => {
                 self.seen_data = true;
                 for c in 0..CONNECTORS {
                     let st = ConnectorStats::from_snapshot(s, c);
+                    self.used[c] |= st.active();
                     for p in 0..PINS {
                         self.peaks[c][p] = self.peaks[c][p].max(st.pins[p]);
                     }
-                    if st.present && st.max_a >= PIN_LIMIT_A {
+                    if st.present && st.max_a >= lim.pin_limit_a {
                         active[Fault::OverCurrent as usize] = true;
                     }
-                    if st.active() && st.imbalance_a >= IMBALANCE_LIMIT_A {
+                    if st.active() && st.imbalance_a >= lim.imbalance_a {
                         active[Fault::Imbalance as usize] = true;
                     }
                 }
@@ -217,14 +316,21 @@ impl Monitor {
             }
             _ => active[Fault::NoData as usize] = true,
         }
-        for (f, a) in self.faults.iter_mut().zip(active) {
+        let mut raised = [false; FAULT_COUNT];
+        for (i, (f, a)) in self.faults.iter_mut().zip(active).enumerate() {
+            let ac = cfg.alarms[i];
+            let a = a && ac.enabled;
+            raised[i] = a && !f.active;
             f.active = a;
-            f.latched |= a;
+            f.latched = if ac.enabled && ac.latch { f.latched || a } else { a };
         }
         if !self.seen_data {
-            // Vor dem ersten Kontakt ist "keine Daten" nur aktiv, nicht gelatcht.
+            // Vor dem ersten Kontakt ist "keine Daten" nur aktiv, nicht gelatcht
+            // und auch kein neuer Alarm.
             self.faults[Fault::NoData as usize].latched = false;
+            raised[Fault::NoData as usize] = false;
         }
+        raised
     }
 
     pub fn clear_faults(&mut self) {
@@ -237,6 +343,13 @@ impl Monitor {
         self.peaks = Default::default();
     }
 
+    /// Statusfeld anzeigen? ALARM S2 nur, wenn Stecker 2 schon einmal belegt
+    /// war oder der Alarm aktiv/gehalten ist (Stecker 2 ist oft unbelegt).
+    pub fn show_fault(&self, f: Fault) -> bool {
+        let st = self.fault(f);
+        f != Fault::Alarm2 || self.used[1] || st.active || st.latched
+    }
+
     pub fn fault(&self, f: Fault) -> FaultState {
         self.faults[f as usize]
     }
@@ -244,17 +357,6 @@ impl Monitor {
     #[allow(dead_code)] // in Tests genutzt
     pub fn any_latched_inactive(&self) -> bool {
         self.faults.iter().any(|f| f.latched && !f.active)
-    }
-}
-
-/// Ampelfarbe eines Pin-Stroms: 0 = grün, 1 = gelb, 2 = rot.
-pub fn pin_level(a: f32) -> u8 {
-    if a >= PIN_LIMIT_A {
-        2
-    } else if a >= PIN_WARN_A {
-        1
-    } else {
-        0
     }
 }
 
@@ -301,32 +403,32 @@ mod tests {
 
     #[test]
     fn levels() {
-        assert_eq!(pin_level(7.99), 0);
-        assert_eq!(pin_level(8.0), 1);
-        assert_eq!(pin_level(9.19), 1);
-        assert_eq!(pin_level(9.2), 2);
+        assert_eq!(Limits::default().pin_level(7.99), 0);
+        assert_eq!(Limits::default().pin_level(8.0), 1);
+        assert_eq!(Limits::default().pin_level(9.19), 1);
+        assert_eq!(Limits::default().pin_level(9.2), 2);
     }
 
     #[test]
     fn faults_latch_and_clear() {
         let mut m = Monitor::default();
-        m.update(None); // Start ohne Daten: aktiv, nicht gelatcht
+        m.update(None, &Config::default()); // Start ohne Daten: aktiv, nicht gelatcht
         assert!(m.fault(Fault::NoData).active && !m.fault(Fault::NoData).latched);
 
-        m.update(Some(&snap([9.5, 7.0, 7.0, 7.0, 7.0, 7.0], [0.0; 6])));
+        m.update(Some(&snap([9.5, 7.0, 7.0, 7.0, 7.0, 7.0], [0.0; 6])), &Config::default());
         assert!(m.fault(Fault::OverCurrent).active);
         assert!(!m.fault(Fault::NoData).active);
         assert!((m.peaks[0][0] - 9.5).abs() < 1e-6);
 
-        m.update(Some(&snap([7.0; 6], [0.0; 6])));
+        m.update(Some(&snap([7.0; 6], [0.0; 6])), &Config::default());
         let oc = m.fault(Fault::OverCurrent);
         assert!(!oc.active && oc.latched);
         assert!(m.any_latched_inactive());
 
-        m.update(None); // Verbindung verloren -> gelatcht
+        m.update(None, &Config::default()); // Verbindung verloren -> gelatcht
         assert!(m.fault(Fault::NoData).latched);
 
-        m.update(Some(&snap([7.0; 6], [0.0; 6])));
+        m.update(Some(&snap([7.0; 6], [0.0; 6])), &Config::default());
         m.clear_faults();
         assert!(!m.any_latched_inactive());
         assert!(!m.fault(Fault::OverCurrent).latched);
@@ -340,10 +442,65 @@ mod tests {
         let mut m = Monitor::default();
         let mut s = snap([9.0, 3.0, 6.0, 6.0, 6.0, 6.0], [0.0; 6]);
         s.vals[idx::ALARM0 + 1] = Some(1.0);
-        m.update(Some(&s));
+        m.update(Some(&s), &Config::default());
         assert!(m.fault(Fault::Imbalance).active);
         assert!(m.fault(Fault::Alarm2).active);
         assert!(!m.fault(Fault::Alarm1).active);
         assert!(!m.fault(Fault::OverCurrent).active);
+    }
+
+    #[test]
+    fn configurable_limits_and_alarms() {
+        let mut cfg = Config::default();
+        cfg.limits.pin_limit_a = 10.0;
+        let mut m = Monitor::default();
+        let s = snap([9.5, 7.0, 7.0, 7.0, 7.0, 7.0], [0.0; 6]);
+        assert!(!m.update(Some(&s), &cfg)[Fault::OverCurrent as usize]);
+        assert!(!m.fault(Fault::OverCurrent).active);
+
+        // steigende Flanke wird genau einmal gemeldet
+        let hot = snap([10.5, 7.0, 7.0, 7.0, 7.0, 7.0], [0.0; 6]);
+        assert!(m.update(Some(&hot), &cfg)[Fault::OverCurrent as usize]);
+        assert!(!m.update(Some(&hot), &cfg)[Fault::OverCurrent as usize]);
+
+        // ohne Halten: verschwindet mit dem Ereignis
+        cfg.alarms[Fault::OverCurrent as usize].latch = false;
+        m.update(Some(&s), &cfg);
+        assert!(!m.fault(Fault::OverCurrent).latched);
+
+        // deaktiviert: nie aktiv, gelatchter Zustand verschwindet
+        cfg.alarms[Fault::OverCurrent as usize] = AlarmCfg { enabled: false, ..AlarmCfg::default() };
+        let r = m.update(Some(&hot), &cfg);
+        assert!(!r[Fault::OverCurrent as usize]);
+        assert_eq!(m.fault(Fault::OverCurrent), FaultState::default());
+    }
+
+    #[test]
+    fn alarm_s2_only_when_connector2_used() {
+        let cfg = Config::default();
+        let mut m = Monitor::default();
+        m.update(Some(&snap([7.0; 6], [0.0; 6])), &cfg);
+        assert!(!m.show_fault(Fault::Alarm2) && m.show_fault(Fault::Alarm1));
+        // Alarm von Stecker 2 wird trotzdem angezeigt
+        let mut s = snap([7.0; 6], [0.0; 6]);
+        s.vals[idx::ALARM0 + 1] = Some(1.0);
+        m.update(Some(&s), &cfg);
+        assert!(m.show_fault(Fault::Alarm2));
+        m.update(Some(&snap([7.0; 6], [0.0; 6])), &cfg);
+        m.clear_faults();
+        assert!(!m.show_fault(Fault::Alarm2));
+        // einmal belegt -> bleibt sichtbar
+        m.update(Some(&snap([7.0; 6], [5.0; 6])), &cfg);
+        m.update(Some(&snap([7.0; 6], [0.0; 6])), &cfg);
+        assert!(m.show_fault(Fault::Alarm2));
+    }
+
+    #[test]
+    fn validate_limits() {
+        assert!(Limits::default().validate().is_ok());
+        let l = Limits { pin_warn_a: 9.5, ..Limits::default() };
+        assert_eq!(l.validate().unwrap_err().0, 0);
+        let l = Limits { connector_rated_w: 10.0, ..Limits::default() };
+        assert_eq!(l.validate().unwrap_err().0, 4);
     }
 }
