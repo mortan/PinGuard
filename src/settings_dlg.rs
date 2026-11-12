@@ -1,9 +1,9 @@
-//! Einstellungsdialog für Grenzwerte und Alarme. Modaler Win32-Dialog aus
+//! Einstellungsdialog für Grenzwerte, Alarme und die angezeigten Kennzahlen. Modaler Win32-Dialog aus
 //! einer Speichervorlage (`DialogBoxIndirectParamW`), die Steuerelemente
 //! werden in `WM_INITDIALOG` in Dialogeinheiten angelegt. Dadurch gibt es
 //! Tab-Navigation, Enter/Esc und DPI-Skalierung ohne Ressourcendatei.
 
-use crate::model::{field, AlarmCfg, Config, ImbalanceMode, Limits, FAULTS, FAULT_COUNT};
+use crate::model::{field, AlarmCfg, Config, ImbalanceMode, Limits, Metric, CONNECTOR_METRICS, FAULTS, FAULT_COUNT, METRICS, METRIC_COUNT, PSU_METRICS};
 use crate::settings::parse_num;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
@@ -36,8 +36,11 @@ const ID_LIMIT0: i32 = 100; // Eingabefelder in `field`-Reihenfolge
 const ID_ALARM0: i32 = 200; // je Fehlerart 4 Kästchen
 const ID_DEFAULTS: i32 = 300;
 const ID_IMB_MODE: i32 = 310;
+const ID_SHOW0: i32 = 400; // je `Metric` ein Kästchen
 
-const DLG_W: i16 = 262;
+/// Breite der linken Spalte (Grenzwerte, Alarme); rechts daneben "Anzeige".
+const LEFT_W: i32 = 262;
+const DLG_W: i16 = 372;
 const DLG_H: i16 = 293;
 
 /// Zeilen der Gruppe "Grenzwerte": Beschriftung, Einheit, Feldindex
@@ -156,6 +159,9 @@ unsafe fn fill(dlg: HWND, cfg: &Config) {
             set_check(dlg, ID_ALARM0 + (fi * 4 + ci) as i32, *on);
         }
     }
+    for m in METRICS {
+        set_check(dlg, ID_SHOW0 + m as i32, cfg.shows(m));
+    }
     update_enabled(dlg);
 }
 
@@ -217,7 +223,11 @@ unsafe fn read(dlg: HWND) -> Option<Config> {
         let c = |ci: usize| get_check(dlg, ID_ALARM0 + (fi * 4 + ci) as i32);
         *a = AlarmCfg { enabled: c(0), latch: c(1), sound: c(2), show: c(3) };
     }
-    Some(Config { limits, alarms })
+    let mut show = [false; METRIC_COUNT];
+    for (i, s) in show.iter_mut().enumerate() {
+        *s = get_check(dlg, ID_SHOW0 + i as i32);
+    }
+    Some(Config { limits, alarms, show })
 }
 
 unsafe fn error(dlg: HWND, id: i32, msg: &str) {
@@ -236,7 +246,7 @@ unsafe fn init(dlg: HWND, ctx: &Ctx) {
 
     // Grenzwerte
     let rows = LIMIT_ROWS.len() as i32;
-    ctl(dlg, f, bt, "Grenzwerte", BS_GROUPBOX, 7, 5, DLG_W as i32 - 14, 17 + rows * 15, -1);
+    ctl(dlg, f, bt, "Grenzwerte", BS_GROUPBOX, 7, 5, LEFT_W - 14, 17 + rows * 15, -1);
     for (i, (label, unit, fld)) in LIMIT_ROWS.iter().enumerate() {
         let y = 19 + i as i32 * 15;
         ctl(dlg, f, st, label, SS_LEFT, 15, y + 2, 140, 9, -1);
@@ -259,7 +269,7 @@ unsafe fn init(dlg: HWND, ctx: &Ctx) {
 
     // Alarme
     let gy = 13 + 17 + rows * 15;
-    ctl(dlg, f, bt, "Alarme", BS_GROUPBOX, 7, gy, DLG_W as i32 - 14, 114, -1);
+    ctl(dlg, f, bt, "Alarme", BS_GROUPBOX, 7, gy, LEFT_W - 14, 114, -1);
     for (ci, name) in ALARM_COLS.iter().enumerate() {
         ctl(dlg, f, st, name, SS_CENTER, COL_X[ci] - 8, gy + 12, 26, 9, -1);
     }
@@ -279,10 +289,28 @@ unsafe fn init(dlg: HWND, ctx: &Ctx) {
         SS_LEFT,
         15,
         gy + 24 + FAULT_COUNT as i32 * 13 + 2,
-        DLG_W as i32 - 30,
+        LEFT_W - 30,
         16,
         -1,
     );
+
+    // Anzeige: welche Kennzahlen das rechte Panel zeigt
+    let ax = LEFT_W - 2;
+    ctl(dlg, f, bt, "Anzeige", BS_GROUPBOX, ax, 5, DLG_W as i32 - 7 - ax, gy + 114 - 5, -1);
+    let mut y = 19;
+    let groups: [(&str, &[Metric]); 3] = [("Stecker", &CONNECTOR_METRICS), ("Netzteil", &PSU_METRICS), ("", &[Metric::Rails])];
+    for (name, ms) in groups {
+        if !name.is_empty() {
+            ctl(dlg, f, st, name, SS_LEFT, ax + 8, y, 80, 9, -1);
+            y += 12;
+        }
+        for m in ms {
+            ctl(dlg, f, bt, m.title(), BS_AUTOCHECKBOX | WS_TABSTOP.0, ax + 14, y, 84, 10, ID_SHOW0 + *m as i32);
+            y += 13;
+        }
+        y += 5;
+    }
+    ctl(dlg, f, st, "Auslastung bezieht sich auf die Nennleistung je Stecker.", SS_LEFT, ax + 8, y + 2, 92, 26, -1);
 
     // Knöpfe
     let by = DLG_H as i32 - 21;

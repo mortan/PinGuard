@@ -101,6 +101,51 @@ fn bar_groups(n: usize) -> (f32, f32) {
     ((BAR_X1 - BAR_X0 - gap * (n as f32 - 1.0)) / n as f32, gap)
 }
 
+/// Anordnung des Kennzahlen-Panels: je Gruppe eine Überschrift und darunter
+/// die eingeblendeten Kennzahlen zweispaltig. Von Zeichnen und Tooltips
+/// gemeinsam genutzt.
+struct MetricLayout {
+    heads: Vec<(&'static str, R)>,
+    cells: Vec<(Metric, R)>,
+}
+
+const METRIC_GROUPS: [(&str, &[Metric]); 2] = [("STECKER", &CONNECTOR_METRICS), ("NETZTEIL", &PSU_METRICS)];
+const METRIC_X0: f32 = 212.0;
+const METRIC_COL_W: f32 = 111.0;
+const METRIC_TOP: f32 = 10.0;
+/// Oberkante der Schienen-Zeile.
+const RAILS_TOP: f32 = 130.0;
+
+fn metric_layout(cfg: &Config) -> MetricLayout {
+    let groups: Vec<(&'static str, Vec<Metric>)> = METRIC_GROUPS
+        .iter()
+        .map(|(name, ms)| (*name, ms.iter().copied().filter(|m| cfg.shows(*m)).collect::<Vec<_>>()))
+        .filter(|(_, ms)| !ms.is_empty())
+        .collect();
+    let mut out = MetricLayout { heads: Vec::new(), cells: Vec::new() };
+    let rows: usize = groups.iter().map(|(_, ms)| ms.len().div_ceil(2)).sum();
+    if rows == 0 {
+        return out;
+    }
+    let avail = if cfg.shows(Metric::Rails) { RAILS_TOP } else { 157.0 } - METRIC_TOP;
+    // Normal 24er-Zeilen; sind alle Kennzahlen eingeblendet (5 Zeilen),
+    // werden sie auf gut 19 gestaucht.
+    let head_h = 12.0;
+    let row_h = ((avail - groups.len() as f32 * head_h) / rows as f32).min(24.0);
+    let mut y = METRIC_TOP;
+    for (name, ms) in &groups {
+        out.heads.push((name, rect(METRIC_X0, y, METRIC_X0 + 2.0 * METRIC_COL_W, y + head_h)));
+        y += head_h;
+        for (i, m) in ms.iter().enumerate() {
+            let x = METRIC_X0 + (i % 2) as f32 * METRIC_COL_W;
+            let top = y + (i / 2) as f32 * row_h;
+            out.cells.push((*m, rect(x, top, x + METRIC_COL_W, top + row_h)));
+        }
+        y += ms.len().div_ceil(2) as f32 * row_h;
+    }
+    out
+}
+
 const CHIPS: [(Fault, &str); FAULT_COUNT] = [
     (Fault::Alarm1, "ALARM S1"),
     (Fault::Alarm2, "ALARM S2"),
@@ -208,21 +253,20 @@ pub fn hint_at(x: f32, y: f32, v: &View) -> Option<Hint> {
     }
 
     // Kennzahlen
-    if (212.0..434.0).contains(&x) && (10.0..130.0).contains(&y) {
-        let col = (((x - 212.0) / 111.0) as usize).min(1);
-        let row = (((y - 10.0) / 24.0) as usize).min(4);
+    let cell = metric_layout(v.config).cells.into_iter().find(|(_, r)| (r.left..r.right).contains(&x) && (r.top..r.bottom).contains(&y));
+    if let Some((m, _)) = cell {
         let scope = if both { " beider Stecker" } else { "" };
-        let text = match (row, col) {
-            (0, 0) => format!("Leistung über den 12V-2x6-Stecker\nSumme der Pin-Ströme{scope} × 12-V-Spannung"),
-            (0, 1) => format!("Auslastung: Steckerleistung bezogen auf {} W Nennleistung je Stecker\nGelb ab 85 %, rot ab 100 %", num(lim.connector_rated_w)),
-            (1, 0) => format!("Summe der Pin-Ströme{scope}"),
-            (1, 1) => format!(
+        let text = match m {
+            Metric::ConnW => format!("Leistung über den 12V-2x6-Stecker\nSumme der Pin-Ströme{scope} × 12-V-Spannung"),
+            Metric::Load => format!("Auslastung: Steckerleistung bezogen auf {} W Nennleistung je Stecker\nGelb ab 85 %, rot ab 100 %", num(lim.connector_rated_w)),
+            Metric::SumA => format!("Summe der Pin-Ströme{scope}"),
+            Metric::MaxPin => format!(
                 "Höchster Pin-Strom im Moment\n{}\nGelb ab {} A, rot ab {} A",
                 if both { "1.3 = Stecker 1, Pin 3" } else { "P3 = Pin 3" },
                 num(lim.pin_warn_a),
                 num(lim.pin_limit_a)
             ),
-            (2, 0) => {
+            Metric::Imbalance => {
                 let worst = if both { "\nAngezeigt wird der höhere Wert beider Stecker." } else { "" };
                 match lim.imbalance_mode {
                     ImbalanceMode::Amps => format!(
@@ -238,17 +282,17 @@ pub fn hint_at(x: f32, y: f32, v: &View) -> Option<Hint> {
                     ),
                 }
             }
-            (2, 1) => format!("Leistungsaufnahme der Grafikkarte\n(Sensor „Power“ aus {})", v.source_name),
-            (3, 0) => "Gesamte Ausgangsleistung des Netzteils (DC-Seite)".to_string(),
-            (3, 1) => "Vom Netzteil gemeldeter Wirkungsgrad".to_string(),
-            (4, 0) => "Temperatur im Netzteil".to_string(),
-            _ => "Drehzahl des Netzteillüfters\n0 rpm: Lüfter steht".to_string(),
+            Metric::GpuW => format!("Leistungsaufnahme der Grafikkarte\n(Sensor „Power“ aus {})", v.source_name),
+            Metric::PsuW => "Gesamte Ausgangsleistung des Netzteils (DC-Seite)".to_string(),
+            Metric::Eff => "Vom Netzteil gemeldeter Wirkungsgrad".to_string(),
+            Metric::Temp => "Temperatur im Netzteil".to_string(),
+            Metric::Fan | Metric::Rails => "Drehzahl des Netzteillüfters\n0 rpm: Lüfter steht".to_string(),
         };
-        return hint(200 + (row * 2 + col) as u32, text);
+        return hint(200 + m as u32, text);
     }
 
     // Rails
-    if (218.0..431.0).contains(&x) && (132.0..=157.0).contains(&y) {
+    if v.config.shows(Metric::Rails) && (218.0..431.0).contains(&x) && (132.0..=157.0).contains(&y) {
         let i = (((x - 218.0) / 71.0) as usize).min(2);
         let name = ["12-V", "5-V", "3,3-V"][i];
         return hint(220 + i as u32, format!("{name}-Schiene des Netzteils: Spannung · Strom"));
@@ -543,7 +587,7 @@ impl Painter<'_> {
         self.fill_round(rect(212.0, 6.0, 434.0, 160.0), 6.0, PANEL, 1.0);
 
         self.draw_bars(v, stats.as_ref(), &vis[..nvis]);
-        self.draw_metrics(&v.config.limits, snap, stats.as_ref(), &vis[..nvis]);
+        self.draw_metrics(v.config, snap, stats.as_ref(), &vis[..nvis]);
         self.draw_status(v);
 
         // Hinweis bei fehlenden Daten über dem Balken-Panel
@@ -640,17 +684,17 @@ impl Painter<'_> {
         }
     }
 
-    fn cell(&self, col: usize, row: usize, label: &str, value: &str, vcol: u32) {
-        let x = 212.0 + col as f32 * 111.0;
-        let y = 10.0 + row as f32 * 24.0;
-        if col == 1 {
-            self.fill(rect(x, y + 3.0, x + 0.7, y + 21.0), FAINT, 0.6);
+    fn cell(&self, r: R, label: &str, value: &str, vcol: u32) {
+        let x = r.left;
+        if x > METRIC_X0 + 1.0 {
+            self.fill(rect(x, r.top + 3.0, x + 0.7, r.bottom - 3.0), FAINT, 0.6);
         }
-        self.text(label, F::Label, rect(x + 9.0, y, x + 60.0, y + 24.0), Align::Left, DIM, 1.0);
-        self.text(value, F::Value, rect(x + 30.0, y, x + 104.0, y + 24.0), Align::Right, vcol, 1.0);
+        self.text(label, F::Label, rect(x + 9.0, r.top, x + 60.0, r.bottom), Align::Left, DIM, 1.0);
+        self.text(value, F::Value, rect(x + 30.0, r.top, x + 104.0, r.bottom), Align::Right, vcol, 1.0);
     }
 
-    fn draw_metrics(&self, lim: &Limits, snap: Option<&PsuSnapshot>, stats: Option<&[ConnectorStats; 2]>, vis: &[usize]) {
+    fn draw_metrics(&self, cfg: &Config, snap: Option<&PsuSnapshot>, stats: Option<&[ConnectorStats; 2]>, vis: &[usize]) {
+        let lim = &cfg.limits;
         let g = |i: usize| snap.and_then(|s| s.get(i));
         // Summen über die angezeigten Stecker
         let sel: Option<(f32, f32, f32, usize, usize, f32, u8)> = stats.map(|s| {
@@ -674,38 +718,57 @@ impl Painter<'_> {
         let sel = sel.filter(|_| present);
 
         let watts = sel.map(|s| s.0);
-        self.cell(0, 0, "Stecker", &opt(watts, 0, "W"), ACCENT);
-        let load = watts.map(|w| w / (lim.connector_rated_w * vis.len() as f32) * 100.0);
-        let load_col = match load {
-            Some(l) if l >= 100.0 => RED,
-            Some(l) if l >= 85.0 => YELLOW,
-            _ => TEXT,
-        };
-        self.cell(1, 0, "Auslast.", &opt(load, 0, "%"), load_col);
-        self.cell(0, 1, "Σ Strom", &opt(sel.map(|s| s.1), 1, "A"), TEXT);
-        let (max_txt, max_col) = match sel {
-            Some((_, _, mx, c, p, _, _)) => {
-                let pin = if vis.len() == 2 { format!("{}.{}", c + 1, p + 1) } else { format!("P{}", p + 1) };
-                (format!("{} A {}", de(mx, 1), pin), value_color(lim.pin_level(mx)))
-            }
-            None => ("–".into(), TEXT),
-        };
-        self.cell(1, 1, "Max", &max_txt, max_col);
-        // Schieflast in der gewählten Messart; Farbe wie die Alarmbewertung
-        // (bei Prozent erst ab Mindestlast).
-        let imb_col = value_color(sel.map_or(0, |s| s.6));
-        let (imb_label, imb_txt) = match lim.imbalance_mode {
-            ImbalanceMode::Amps => ("Δ Pins", opt(sel.map(|s| s.5), 2, "A")),
-            ImbalanceMode::Percent => ("Abw.", opt(sel.map(|s| s.5), 0, "%")),
-        };
-        self.cell(0, 2, imb_label, &imb_txt, imb_col);
-        self.cell(1, 2, "GPU", &opt(g(idx::GPU_W), 0, "W"), TEXT);
-        self.cell(0, 3, "PSU DC", &opt(g(idx::PSU_W), 0, "W"), TEXT);
-        self.cell(1, 3, "Effizienz", &opt(g(idx::EFF), 1, "%"), TEXT);
-        self.cell(0, 4, "Temp.", &opt(g(idx::TEMP), 0, "°C"), TEXT);
-        self.cell(1, 4, "Lüfter", &opt(g(idx::FAN), 0, "rpm"), TEXT);
+        let layout = metric_layout(cfg);
+        for (name, r) in &layout.heads {
+            let r = rect(r.left + 9.0, r.top + 1.0, r.right - 8.0, r.bottom);
+            self.text(name, F::Tiny, r, Align::Left, PIN_NO, 1.0);
+            let lx = r.left + self.text_width(name, F::Tiny) + 6.0;
+            let ly = (r.top + r.bottom) / 2.0 + 0.5;
+            self.fill(rect(lx, ly - 0.35, r.right, ly + 0.35), FAINT, 0.6);
+        }
+        for (m, r) in &layout.cells {
+            let (label, value, col) = match m {
+                Metric::ConnW => ("Leistung", opt(watts, 0, "W"), ACCENT),
+                Metric::Load => {
+                    let load = watts.map(|w| w / (lim.connector_rated_w * vis.len() as f32) * 100.0);
+                    let col = match load {
+                        Some(l) if l >= 100.0 => RED,
+                        Some(l) if l >= 85.0 => YELLOW,
+                        _ => TEXT,
+                    };
+                    ("Auslast.", opt(load, 0, "%"), col)
+                }
+                Metric::SumA => ("Σ Strom", opt(sel.map(|s| s.1), 1, "A"), TEXT),
+                Metric::MaxPin => match sel {
+                    Some((_, _, mx, c, p, _, _)) => {
+                        let pin = if vis.len() == 2 { format!("{}.{}", c + 1, p + 1) } else { format!("P{}", p + 1) };
+                        ("Max", format!("{} A {}", de(mx, 1), pin), value_color(lim.pin_level(mx)))
+                    }
+                    None => ("Max", "–".into(), TEXT),
+                },
+                // Schieflast in der gewählten Messart; Farbe wie die
+                // Alarmbewertung (bei Prozent erst ab Mindestlast).
+                Metric::Imbalance => {
+                    let col = value_color(sel.map_or(0, |s| s.6));
+                    match lim.imbalance_mode {
+                        ImbalanceMode::Amps => ("Δ Pins", opt(sel.map(|s| s.5), 2, "A"), col),
+                        ImbalanceMode::Percent => ("Abw.", opt(sel.map(|s| s.5), 0, "%"), col),
+                    }
+                }
+                Metric::GpuW => ("GPU", opt(g(idx::GPU_W), 0, "W"), TEXT),
+                Metric::PsuW => ("Leistung", opt(g(idx::PSU_W), 0, "W"), TEXT),
+                Metric::Eff => ("Effizienz", opt(g(idx::EFF), 1, "%"), TEXT),
+                Metric::Temp => ("Temp.", opt(g(idx::TEMP), 0, "°C"), TEXT),
+                Metric::Fan => ("Lüfter", opt(g(idx::FAN), 0, "rpm"), TEXT),
+                Metric::Rails => continue,
+            };
+            self.cell(*r, label, &value, col);
+        }
 
         // Rails
+        if !cfg.shows(Metric::Rails) {
+            return;
+        }
         self.fill(rect(220.0, 131.0, 426.0, 131.7), FAINT, 0.6);
         let rails = [("12 V", idx::V12, idx::A12), ("5 V", idx::V5, idx::A5), ("3,3 V", idx::V33, idx::A33)];
         for (i, (name, vi, ai)) in rails.iter().enumerate() {
@@ -774,8 +837,20 @@ mod tests {
         assert_eq!(hint_at(88.0, amp_y(&cfg.limits, 9.2), &v).unwrap().id, 1);
         assert_eq!(hint_at(88.0, amp_y(&cfg.limits, 8.0), &v).unwrap().id, 2);
         // Kennzahlen und Rails
-        assert!(hint_at(380.0, 46.0, &v).unwrap().text.contains("P3 = Pin 3"));
+        // Standard: Stecker (Leistung, Σ / Max, Δ), Netzteil (Leistung, Effizienz / Temp., Lüfter)
+        assert!(hint_at(250.0, 58.0, &v).unwrap().text.contains("P3 = Pin 3"));
+        assert_eq!(hint_at(380.0, 118.0, &v).unwrap().id, 200 + Metric::Fan as u32);
+        assert!(hint_at(250.0, 15.0, &v).is_none()); // Gruppenüberschrift
         assert!(hint_at(250.0, 150.0, &v).unwrap().text.starts_with("12-V"));
+        // alles eingeblendet: fünf gestauchte Zeilen passen über die Schienen
+        let all = Config { show: [true; METRIC_COUNT], ..cfg };
+        let l = metric_layout(&all);
+        assert!(l.heads.len() == 2 && l.cells.len() == 10);
+        assert!(l.cells.iter().all(|(_, r)| r.bottom <= RAILS_TOP + 0.01 && r.bottom - r.top >= 19.0));
+        // nichts eingeblendet: kein Tooltip, keine Schienen
+        let none = Config { show: [false; METRIC_COUNT], ..cfg };
+        let vn = View { reading: &reading, monitor: &mon, config: &none, source_name: "Test" };
+        assert!(hint_at(250.0, 58.0, &vn).is_none() && hint_at(250.0, 150.0, &vn).is_none());
         // Statuszeile: ALARM S2 ist ausgeblendet, vier Felder
         assert!(hint_at(60.0, 178.0, &v).unwrap().text.ends_with("In Ordnung."));
         assert_eq!(hint_at(420.0, 178.0, &v).unwrap().id, 300 + Fault::NoData as u32);

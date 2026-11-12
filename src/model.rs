@@ -181,16 +181,89 @@ impl Default for AlarmCfg {
     }
 }
 
+/// Ein- und ausblendbare Anzeigen im Kennzahlen-Panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Metric {
+    ConnW = 0,
+    SumA = 1,
+    MaxPin = 2,
+    Imbalance = 3,
+    Load = 4,
+    GpuW = 5,
+    PsuW = 6,
+    Eff = 7,
+    Temp = 8,
+    Fan = 9,
+    /// Zeile mit den drei Spannungsschienen
+    Rails = 10,
+}
+pub const METRIC_COUNT: usize = 11;
+pub const METRICS: [Metric; METRIC_COUNT] = [
+    Metric::ConnW,
+    Metric::SumA,
+    Metric::MaxPin,
+    Metric::Imbalance,
+    Metric::Load,
+    Metric::GpuW,
+    Metric::PsuW,
+    Metric::Eff,
+    Metric::Temp,
+    Metric::Fan,
+    Metric::Rails,
+];
+/// Kennzahlen der Gruppe „Stecker“ bzw. „Netzteil“, in Anzeigereihenfolge.
+pub const CONNECTOR_METRICS: [Metric; 6] = [Metric::ConnW, Metric::SumA, Metric::MaxPin, Metric::Imbalance, Metric::Load, Metric::GpuW];
+pub const PSU_METRICS: [Metric; 4] = [Metric::PsuW, Metric::Eff, Metric::Temp, Metric::Fan];
+
+impl Metric {
+    /// Schlüssel in der INI-Datei (`show_<key>`).
+    pub fn key(self) -> &'static str {
+        ["conn_w", "sum_a", "max_pin", "imbalance", "load", "gpu_w", "psu_w", "eff", "temp", "fan", "rails"][self as usize]
+    }
+    /// Beschriftung im Einstellungsdialog.
+    pub fn title(self) -> &'static str {
+        [
+            "Leistung",
+            "Σ Strom",
+            "Höchster Pin",
+            "Schieflast",
+            "Auslastung",
+            "GPU-Leistung",
+            "Leistung (DC)",
+            "Effizienz",
+            "Temperatur",
+            "Lüfter",
+            "Spannungsschienen",
+        ][self as usize]
+    }
+    /// Standard: alles außer Auslastung (hängt vom Power-Limit ab) und
+    /// GPU-Leistung (die Steckerleistung ist das Entscheidende).
+    pub fn default_shown(self) -> bool {
+        !matches!(self, Metric::Load | Metric::GpuW)
+    }
+}
+
 /// Gesamte fachliche Konfiguration.
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Config {
     pub limits: Limits,
     pub alarms: [AlarmCfg; FAULT_COUNT],
+    /// Sichtbarkeit je `Metric`.
+    pub show: [bool; METRIC_COUNT],
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config { limits: Limits::default(), alarms: Default::default(), show: METRICS.map(Metric::default_shown) }
+    }
 }
 
 impl Config {
     pub fn alarm(&self, f: Fault) -> AlarmCfg {
         self.alarms[f as usize]
+    }
+    pub fn shows(&self, m: Metric) -> bool {
+        self.show[m as usize]
     }
 }
 

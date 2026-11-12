@@ -5,8 +5,9 @@
 //! Schieflast `imbalance_mode` (amps/percent), `imbalance` (A),
 //! `imbalance_pct` (%), `imbalance_min_load` (A). Alarme: je Fehlerart `<key>_on`, `<key>_latch`,
 //! `<key>_sound`, `<key>_show` (0/1), mit `<key>` aus `Fault::key`.
+//! Anzeige: `show_<key>` (0/1) mit `<key>` aus `Metric::key`.
 
-use crate::model::{Config, ImbalanceMode, FAULTS};
+use crate::model::{Config, ImbalanceMode, FAULTS, METRICS};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -58,6 +59,11 @@ impl Settings {
                 "imbalance_pct" => num(&mut lim.imbalance_pct),
                 "imbalance_min_load" => num(&mut lim.imbalance_min_load_a),
                 "rated_w" => num(&mut lim.connector_rated_w),
+                _ if k.starts_with("show_") => {
+                    if let Some(m) = METRICS.iter().find(|m| m.key() == &k[5..]) {
+                        s.config.show[*m as usize] = v == "1";
+                    }
+                }
                 _ => {
                     let Some((fk, attr)) = k.rsplit_once('_') else { continue };
                     let Some(f) = FAULTS.iter().find(|f| f.key() == fk) else { continue };
@@ -115,6 +121,10 @@ impl Settings {
                 a.enabled as u8, a.latch as u8, a.sound as u8, a.show as u8
             );
         }
+        out += "\n# Anzeige: welche Kennzahlen rechts erscheinen (0/1)\n";
+        for m in METRICS {
+            out += &format!("show_{}={}\n", m.key(), self.config.shows(m) as u8);
+        }
         out
     }
 
@@ -135,7 +145,7 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{AlarmCfg, Fault, ImbalanceMode, Limits};
+    use crate::model::{AlarmCfg, Fault, ImbalanceMode, Limits, Metric};
 
     #[test]
     fn roundtrip() {
@@ -152,6 +162,8 @@ mod tests {
         };
         s.config.alarms[Fault::Imbalance as usize] = AlarmCfg { enabled: true, latch: false, sound: true, show: true };
         s.config.alarms[Fault::NoData as usize].enabled = false;
+        s.config.show[Metric::Load as usize] = true;
+        s.config.show[Metric::Fan as usize] = false;
         assert_eq!(Settings::parse(&s.serialize()), s);
         assert_eq!(Settings::parse("garbage\nx=1"), Settings::default());
     }

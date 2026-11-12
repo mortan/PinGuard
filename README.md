@@ -14,8 +14,8 @@ Mock-Modus mit Schieflast, Alarm und gelatchtem Überstrom: [docs/screenshot-moc
 | Bereich | Inhalt |
 |---|---|
 | Balken links | 6 Pins des aktiven Steckers. Ampel (Standard, einstellbar): grün < 8 A, gelb 8–9,2 A, rot ≥ 9,2 A. Vollausschlag 12 A, rote Linie an der Rot-Grenze, gelbe Linie an der Gelb-Grenze, Strich = Peak seit Start/Reset. Stecker 2 erscheint nur, wenn er Strom führt. |
-| Kennzahlen rechts | Stecker-Leistung (Σ Pins × gemessene 12 V), Auslastung (bezogen auf 600 W), Σ Strom, Max-Pin, Schieflast (Δ Pins in A oder Abw. in %, je nach Messart), GPU-Board-Power (Afterburner `Power`), PSU DC, Effizienz, Temperatur, Lüfter |
-| Rails | 12 V / 5 V / 3,3 V: Spannung und Strom |
+| Kennzahlen rechts | Zwei Gruppen. **Stecker:** Leistung (Σ Pins × gemessene 12 V), Σ Strom, Max-Pin, Schieflast (Δ Pins in A oder Abw. in %, je nach Messart). **Netzteil:** DC-Leistung, Effizienz, Temperatur, Lüfter. Zusätzlich einblendbar: Auslastung (bezogen auf die Nennleistung je Stecker) und GPU-Board-Power (Afterburner `Power`). |
+| Rails | 12 V / 5 V / 3,3 V: Spannung und Strom (ausblendbar) |
 | Statuszeile | ALARM S1/S2 (Alarm-Flag, das das Netzteil selbst je Stecker meldet), ÜBERSTROM (Pin ≥ Rot-Grenze), SCHIEFLAST (Grenze in A oder %, siehe unten; Standard 3 A), VERBINDUNG. **Rot** = aktiv, **orange umrandet** = war aktiv (gelatcht), blass = abgeschaltet. ALARM S2 erscheint erst, wenn Stecker 2 seit dem Start Strom geführt hat oder sein Alarm auslöst. |
 
 Bedienung:
@@ -49,6 +49,10 @@ Mindestlast wird nicht bewertet, weil dort schon Messrauschen große Prozentwert
 WireView Pro II: „Imbalance Limit (%)“ plus „Imbalance Current Limit (A)“). Ein ausgefallener Pin
 entspricht 100 % Abweichung. Die Kennzahl links heißt je nach Modus „Δ Pins“ (A) oder „Abw.“ (%).
 Sie wird ab der halben Grenze gelb und ab der Grenze rot.
+
+**Anzeige:** Rechts im Dialog lässt sich jede Kennzahl ein- und ausblenden (INI: `show_<name>` = 0/1 mit
+`conn_w`, `sum_a`, `max_pin`, `imbalance`, `load`, `gpu_w`, `psu_w`, `eff`, `temp`, `fan`, `rails`).
+Standardmäßig aus sind Auslastung und GPU-Leistung.
 
 Je Alarm (`alarm1`, `alarm2`, `overcurrent`, `imbalance`, `nodata`) gibt es vier Schalter:
 **Aktiv** (`<alarm>_on`: auswerten und anzeigen), **Halten** (`_latch`: bleibt orange markiert bis zum Klick auf die Statuszeile),
