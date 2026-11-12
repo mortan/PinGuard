@@ -1338,7 +1338,7 @@ mod tests {
         assert_eq!(hint_at(90.0, 150.0, &v).unwrap().id, 102);
         // Grenzlinien haben Vorrang vor dem Balken darunter
         assert_eq!(hint_at(88.0, amp_y(&cfg.limits, 9.2), &v).unwrap().id, 1);
-        assert_eq!(hint_at(88.0, amp_y(&cfg.limits, 8.0), &v).unwrap().id, 2);
+        assert_eq!(hint_at(88.0, amp_y(&cfg.limits, cfg.limits.pin_warn_a), &v).unwrap().id, 2);
         // Kennzahlen und Rails
         // Standard: Stecker (Leistung, Σ / Max, Δ), Netzteil (Leistung, Effizienz / Temp., Lüfter)
         assert!(hint_at(250.0, 58.0, &v).unwrap().text.contains("P3 = Pin 3"));
@@ -1505,7 +1505,7 @@ mod tests {
         // Mittel 6,25 A bei 12 A Vollausschlag: 48,96 über der Unterkante
         assert!((mean_y(&cfg.limits, &st) - (BAR_BOTTOM - 6.25 / 12.0 * (BAR_BOTTOM - BAR_TOP))).abs() < 1e-4);
         let y_mean = mean_y(&cfg.limits, &st);
-        let y_warn = amp_y(&cfg.limits, 8.0);
+        let y_warn = amp_y(&cfg.limits, cfg.limits.pin_warn_a);
         i18n::set_lang(i18n::Lang::De);
         {
             // Standard: Linie aus, an ihrer Stelle der Pin-Balken
