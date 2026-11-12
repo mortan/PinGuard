@@ -21,13 +21,44 @@ The same load cycle in the minimal view:
 ## Requirements
 
 - Windows 11
-- **MSI MPG Ai1300TS PCIE5** connected over USB
-- **MSI Afterburner** (tested with 4.6.7) with its bundled **PSU monitoring plugin** enabled
-  (`PSU.dll`, enabled in Afterburner's monitoring settings). PinGuard reads the values
-  Afterburner publishes. The order of the monitoring sources in Afterburner doesn't matter.
+- **MSI MPG Ai1300TS PCIE5** with its USB cable connected to the mainboard
+- **[MSI Afterburner](https://www.msi.com/Landing/afterburner/graphics-cards)** (tested with 4.6.7 beta),
+  running in the background
 
-If Afterburner isn't running, PinGuard shows a notice and connects automatically as soon as
-Afterburner is back.
+PinGuard does not talk to the power supply itself. Afterburner's bundled **PSU monitoring plugin**
+reads the PSU over USB and publishes the values; PinGuard only reads them from Afterburner's
+shared memory. So Afterburner has to run whenever you want to use PinGuard. RivaTuner Statistics
+Server (the on-screen display) is not needed.
+
+## Setting up MSI Afterburner
+
+You only need to do this once.
+
+1. Install MSI Afterburner, only from msi.com or Guru3D. The PSU plugin
+   (`Plugins\Monitoring\PSU.dll`) is included; if it is missing in your version, use the
+   current beta.
+2. Open Afterburner's **Settings** and go to the **Monitoring** tab.
+3. Click the **…** button next to *Active hardware monitoring graphs*, tick **PSU.dll** in the
+   list of monitoring plugins and confirm with OK.
+4. Back in the list of *Active hardware monitoring graphs*, the new PSU entries now appear. Tick
+   these (Afterburner only publishes ticked entries):
+   - `PSU 12VHPWR1_1 current` … `PSU 12VHPWR1_6 current` (the six pins, **required**)
+   - `PSU 12VHPWR2_1 current` … `PSU 12VHPWR2_6 current` (second connector, if your card has one)
+   - `PSU 12VHPWR1 alarm`, `PSU 12VHPWR2 alarm`
+   - `PSU 12V voltage`, `PSU 12V current`, `PSU 5V voltage`, `PSU 5V current`,
+     `PSU 3.3V voltage`, `PSU 3.3V current`
+   - `PSU power`, `PSU efficiency`, `PSU temperature`, `PSU fan speed`
+   - optional: `Power` (GPU board power, for the *GPU power* metric)
+
+   The order of the entries doesn't matter. Anything you leave unticked simply stays empty in
+   PinGuard.
+5. Optional: on the **General** tab, enable *Start with Windows* and *Start minimized*, so
+   Afterburner is always running in the background.
+6. Click **OK**. The values now update once per second (Afterburner's default
+   *Hardware polling period* of 1000 ms).
+
+If Afterburner isn't running or publishes no PSU values, PinGuard shows a notice and connects
+automatically as soon as the data is there.
 
 ## Installation
 
