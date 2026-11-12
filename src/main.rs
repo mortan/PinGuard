@@ -12,6 +12,7 @@ mod render;
 mod settings;
 mod settings_dlg;
 mod source;
+mod tip;
 
 use model::Monitor;
 use render::{Renderer, View};
@@ -26,10 +27,16 @@ use windows::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::HiDpi::*;
+use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 const TIMER_ID: usize = 1;
-const CMD_RESET_PEAKS: usize = 1;
+/// Verzögerung, bis ein Tooltip erscheint.
+const TIMER_TIP: usize = 2;
+const TIP_DELAY_MS: u32 = 450;
+// Werte aus WinUser.h
+const WM_NCMOUSELEAVE: u32 = 0x02A2;
+const WM_MOUSELEAVE: u32 = 0x02A3;const CMD_RESET_PEAKS: usize = 1;
 const CMD_RESET_FAULTS: usize = 2;
 const CMD_TOPMOST: usize = 3;
 const CMD_EXIT: usize = 4;
@@ -43,6 +50,10 @@ struct App {
     renderer: Renderer,
     settings: Settings,
     minimized: bool,
+    tip: tip::Tip,
+    /// Bereich (`Hint::id`) unter der Maus und die Stelle in Basiskoordinaten.
+    tip_region: Option<u32>,
+    tip_base: (f32, f32),
 }
 
 impl App {
@@ -53,7 +64,94 @@ impl App {
             let raised = self.update_monitor();
             self.signal(hwnd, raised);
             self.invalidate(hwnd);
+            self.tip_refresh(hwnd);
         }
+    }
+
+    fn hint_at(&self, bx: f32, by: f32) -> Option<render::Hint> {
+        let view = View { reading: &self.reading, monitor: &self.monitor, config: &self.settings.config, source_name: self.source.name() };
+        render::hint_at(bx, by, &view)
+    }
+
+    /// Mauszeiger (Bildschirm- und Basiskoordinaten), falls er über dem
+    /// sichtbaren Teil des Fensters steht.
+    fn cursor(&self, hwnd: HWND) -> Option<(POINT, (f32, f32))> {
+        unsafe {
+            let mut pt = POINT::default();
+            GetCursorPos(&mut pt).ok()?;
+            if WindowFromPoint(pt) != hwnd {
+                return None;
+            }
+            let mut c = pt;
+            let _ = ScreenToClient(hwnd, &mut c);
+            Some((pt, self.renderer.to_base(c.x, c.y)))
+        }
+    }
+
+    /// Mausbewegung: Tooltip nach kurzer Verzögerung; ist schon einer zu
+    /// sehen, wechselt er sofort zum neuen Bereich.
+    fn tip_move(&mut self, hwnd: HWND, nonclient: bool) {
+        unsafe {
+            let mut tme = TRACKMOUSEEVENT {
+                cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: if nonclient { TME_LEAVE | TME_NONCLIENT } else { TME_LEAVE },
+                hwndTrack: hwnd,
+                dwHoverTime: 0,
+            };
+            let _ = TrackMouseEvent(&mut tme);
+            let Some((screen, (bx, by))) = self.cursor(hwnd) else { return self.tip_leave(hwnd) };
+            let hint = self.hint_at(bx, by);
+            let id = hint.as_ref().map(|h| h.id);
+            if id == self.tip_region {
+                return;
+            }
+            self.tip_region = id;
+            self.tip_base = (bx, by);
+            match hint {
+                Some(h) if self.tip.visible => self.tip.show(&h.text, screen, GetDpiForWindow(hwnd)),
+                Some(_) => {
+                    SetTimer(hwnd, TIMER_TIP, TIP_DELAY_MS, None);
+                }
+                None => self.tip_cancel(hwnd),
+            }
+        }
+    }
+
+    fn tip_timer(&mut self, hwnd: HWND) {
+        unsafe {
+            let _ = KillTimer(hwnd, TIMER_TIP);
+            let Some((screen, (bx, by))) = self.cursor(hwnd) else { return };
+            if let Some(h) = self.hint_at(bx, by).filter(|h| Some(h.id) == self.tip_region) {
+                self.tip_base = (bx, by);
+                self.tip.show(&h.text, screen, GetDpiForWindow(hwnd));
+            }
+        }
+    }
+
+    /// Text eines sichtbaren Tooltips an neue Daten anpassen.
+    fn tip_refresh(&mut self, hwnd: HWND) {
+        if !self.tip.visible {
+            return;
+        }
+        match self.hint_at(self.tip_base.0, self.tip_base.1) {
+            Some(h) if Some(h.id) == self.tip_region => self.tip.update(&h.text, unsafe { GetDpiForWindow(hwnd) }),
+            _ => self.tip_cancel(hwnd),
+        }
+    }
+
+    /// Tooltip ausblenden; der Bereich bleibt gemerkt, damit er erst nach
+    /// einem Bereichswechsel wieder erscheint (z. B. nach einem Klick).
+    fn tip_cancel(&mut self, hwnd: HWND) {
+        unsafe {
+            let _ = KillTimer(hwnd, TIMER_TIP);
+        }
+        self.tip.hide();
+    }
+
+    /// Maus hat das Fenster verlassen.
+    fn tip_leave(&mut self, hwnd: HWND) {
+        self.tip_region = None;
+        self.tip_cancel(hwnd);
     }
 
     /// Wertet den aktuellen Stand mit der aktuellen Konfiguration aus.
@@ -139,6 +237,7 @@ fn in_status(app: &App, x: i32, y: i32) -> bool {
 }
 
 unsafe fn show_menu(hwnd: HWND, app: &mut App, mut pt: POINT) {
+    app.tip_cancel(hwnd);
     if pt.x == -1 && pt.y == -1 {
         let _ = GetCursorPos(&mut pt);
     }
@@ -193,6 +292,26 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             WM_TIMER if wp.0 == TIMER_ID => {
                 app.tick(hwnd);
                 LRESULT(0)
+            }
+            WM_TIMER if wp.0 == TIMER_TIP => {
+                app.tip_timer(hwnd);
+                LRESULT(0)
+            }
+            WM_NCMOUSEMOVE | WM_MOUSEMOVE => {
+                app.tip_move(hwnd, msg == WM_NCMOUSEMOVE);
+                DefWindowProcW(hwnd, msg, wp, lp)
+            }
+            WM_NCMOUSELEAVE | WM_MOUSELEAVE => {
+                // Beim Wechsel zwischen Statuszeile (Client) und Rest
+                // (Titelleiste) steht die Maus weiter über dem Fenster.
+                if app.cursor(hwnd).is_none() {
+                    app.tip_leave(hwnd);
+                }
+                DefWindowProcW(hwnd, msg, wp, lp)
+            }
+            WM_NCLBUTTONDOWN | WM_NCRBUTTONDOWN | WM_LBUTTONDOWN | WM_RBUTTONDOWN => {
+                app.tip_cancel(hwnd);
+                DefWindowProcW(hwnd, msg, wp, lp)
             }
             WM_PAINT => {
                 let mut ps = PAINTSTRUCT::default();
@@ -251,6 +370,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 if minimized {
                     // Backbuffer freigeben, solange nichts zu sehen ist.
                     app.renderer.discard();
+                    app.tip_leave(hwnd);
                 } else {
                     let _ = InvalidateRect(hwnd, None, false);
                 }
@@ -388,6 +508,9 @@ fn main() -> Result<()> {
             renderer,
             settings,
             minimized: false,
+            tip: tip::Tip::new(hinst, hwnd),
+            tip_region: None,
+            tip_base: (0.0, 0.0),
         });
         app.renderer.set_dpi(GetDpiForWindow(hwnd));
         app.update_monitor();

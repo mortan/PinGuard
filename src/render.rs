@@ -12,7 +12,7 @@
 use crate::model::*;
 use crate::source::Reading;
 use windows::core::w;
-use windows::Win32::Foundation::{COLORREF, RECT};
+use windows::Win32::Foundation::{COLORREF, RECT, SIZE};
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::Graphics::GdiPlus::*;
 
@@ -34,6 +34,8 @@ const TRACK: u32 = 0x272B33;
 const TEXT: u32 = 0xF0F0F0;
 const DIM: u32 = 0x8A909C;
 const FAINT: u32 = 0x4A505C;
+/// Pin-Nummern: heller als `FAINT`, damit sie auch klein lesbar bleiben.
+const PIN_NO: u32 = 0x6A7080;
 const ACCENT: u32 = 0x4FC3F7;
 const AMBER: u32 = 0xFFA726;
 
@@ -60,6 +62,15 @@ fn level_color(l: &Limits, a: f32) -> u32 {
     }
 }
 
+/// Farbe einer Kennzahl: unauffällig weiß, Farbe nur bei Warnung/Alarm.
+fn value_color(level: u8) -> u32 {
+    match level {
+        0 => TEXT,
+        1 => YELLOW,
+        _ => RED,
+    }
+}
+
 #[derive(Clone, Copy)]
 struct R {
     left: f32,
@@ -70,6 +81,179 @@ struct R {
 
 fn rect(l: f32, t: f32, r: f32, b: f32) -> R {
     R { left: l, top: t, right: r, bottom: b }
+}
+
+// Balkenfläche (Basiskoordinaten); von Zeichnen und Tooltips gemeinsam genutzt.
+const BAR_TOP: f32 = 30.0;
+const BAR_BOTTOM: f32 = 124.0;
+const BAR_X0: f32 = 14.0;
+const BAR_X1: f32 = 198.0;
+
+/// y-Position eines Pin-Stroms in der Balkenfläche.
+fn amp_y(lim: &Limits, a: f32) -> f32 {
+    let fs = lim.full_scale_a;
+    BAR_BOTTOM - (a.clamp(0.0, fs) / fs) * (BAR_BOTTOM - BAR_TOP)
+}
+
+/// Breite einer Steckergruppe und Abstand zwischen den Gruppen.
+fn bar_groups(n: usize) -> (f32, f32) {
+    let gap = if n == 2 { 10.0 } else { 0.0 };
+    ((BAR_X1 - BAR_X0 - gap * (n as f32 - 1.0)) / n as f32, gap)
+}
+
+const CHIPS: [(Fault, &str); FAULT_COUNT] = [
+    (Fault::Alarm1, "ALARM S1"),
+    (Fault::Alarm2, "ALARM S2"),
+    (Fault::OverCurrent, "ÜBERSTROM"),
+    (Fault::Imbalance, "SCHIEFLAST"),
+    (Fault::NoData, "VERBINDUNG"),
+];
+
+/// Die angezeigten Statusfelder mit ihrer Fläche.
+fn visible_chips(v: &View) -> Vec<(Fault, &'static str, R)> {
+    let chips: Vec<_> = CHIPS.iter().filter(|(f, _)| v.monitor.show_fault(*f)).collect();
+    let gap = 5.0;
+    let n = chips.len() as f32;
+    let cw = (STATUS_X1 - STATUS_X0 - gap * (n - 1.0)) / n;
+    chips
+        .iter()
+        .enumerate()
+        .map(|(i, (f, label))| {
+            let x = STATUS_X0 + i as f32 * (cw + gap);
+            (*f, *label, rect(x, STATUS_Y0, x + cw, STATUS_Y1))
+        })
+        .collect()
+}
+
+/// Zahl ohne unnötige Nachkommastellen, mit Dezimalkomma.
+fn num(v: f32) -> String {
+    let s = format!("{:.2}", v);
+    s.trim_end_matches('0').trim_end_matches('.').replace('.', ",")
+}
+
+/// Tooltip für eine Stelle der Oberfläche. `id` kennzeichnet den Bereich
+/// (bleibt gleich, solange die Maus im selben Bereich ist), der Text kann
+/// sich mit den Daten ändern.
+pub struct Hint {
+    pub id: u32,
+    pub text: String,
+}
+
+/// Liefert den Tooltip für einen Punkt in Basiskoordinaten.
+pub fn hint_at(x: f32, y: f32, v: &View) -> Option<Hint> {
+    let lim = &v.config.limits;
+    let hint = |id: u32, text: String| Some(Hint { id, text });
+
+    // Statuszeile
+    if (STATUS_Y0..=STATUS_Y1).contains(&y) {
+        let (fault, _, _) = visible_chips(v).into_iter().find(|(_, _, r)| x >= r.left && x <= r.right)?;
+        let what = match fault {
+            Fault::Alarm1 => "Netzteil-Alarm Stecker 1: vom Netzteil selbst gemeldet".to_string(),
+            Fault::Alarm2 => "Netzteil-Alarm Stecker 2: vom Netzteil selbst gemeldet".to_string(),
+            Fault::OverCurrent => format!("Überstrom: ein Pin führt {} A oder mehr", num(lim.pin_limit_a)),
+            Fault::Imbalance => match lim.imbalance_mode {
+                ImbalanceMode::Amps => format!("Schieflast: größter minus kleinster Pin-Strom ab {} A", num(lim.imbalance_a)),
+                ImbalanceMode::Percent => format!("Schieflast: ein Pin weicht {} % oder mehr vom Mittel ab", num(lim.imbalance_pct)),
+            },
+            Fault::NoData => format!("Verbindung: keine Netzteil-Daten von {}", v.source_name),
+        };
+        let st = v.monitor.fault(fault);
+        let state = if !v.config.alarm(fault).enabled {
+            "Alarm ist abgeschaltet."
+        } else if st.active {
+            "Jetzt aktiv."
+        } else if st.latched {
+            "War ausgelöst – Klick setzt zurück."
+        } else {
+            "In Ordnung."
+        };
+        return hint(300 + fault as u32, format!("{what}\n{state}"));
+    }
+
+    let Reading::Data(snap) = v.reading else { return None };
+    let stats = [ConnectorStats::from_snapshot(snap, 0), ConnectorStats::from_snapshot(snap, 1)];
+    let (vis, nvis) = visible_connectors(&stats);
+    let vis = &vis[..nvis];
+    let both = nvis == 2;
+
+    // Balken-Panel
+    if (BAR_X0 - 3.0..=BAR_X1 + 3.0).contains(&x) {
+        let in_bars = (BAR_TOP..=BAR_BOTTOM).contains(&y);
+        let on_label = !both && x >= 158.0 && (9.0..=25.0).contains(&y);
+        if on_label || (in_bars && (y - amp_y(lim, lim.pin_limit_a)).abs() <= 2.5) {
+            return hint(1, format!("Überstrom-Grenze: {} A je Pin\nAb hier wird der Pin rot und ÜBERSTROM löst aus.", num(lim.pin_limit_a)));
+        }
+        if in_bars && (y - amp_y(lim, lim.pin_warn_a)).abs() <= 2.5 {
+            return hint(2, format!("Warnschwelle: {} A je Pin\nAb hier wird der Pin gelb.", num(lim.pin_warn_a)));
+        }
+        if (26.0..=157.0).contains(&y) && (BAR_X0..BAR_X1).contains(&x) {
+            let (group_w, gap) = bar_groups(nvis);
+            let g = (((x - BAR_X0) / (group_w + gap)) as usize).min(nvis - 1);
+            let lx = x - BAR_X0 - g as f32 * (group_w + gap);
+            if lx < group_w {
+                let p = ((lx / group_w * PINS as f32) as usize).min(PINS - 1);
+                let c = vis[g];
+                let now = if stats[c].present { format!("{} A", de(stats[c].pins[p], 2)) } else { "keine Daten".into() };
+                let text = format!(
+                    "Stecker {} · Pin {}\nAktuell: {}\nPeak: {} A (Doppelklick setzt zurück)",
+                    c + 1,
+                    p + 1,
+                    now,
+                    de(v.monitor.peaks[c][p], 2)
+                );
+                return hint(100 + (c * PINS + p) as u32, text);
+            }
+        }
+        return None;
+    }
+
+    // Kennzahlen
+    if (212.0..434.0).contains(&x) && (10.0..130.0).contains(&y) {
+        let col = (((x - 212.0) / 111.0) as usize).min(1);
+        let row = (((y - 10.0) / 24.0) as usize).min(4);
+        let scope = if both { " beider Stecker" } else { "" };
+        let text = match (row, col) {
+            (0, 0) => format!("Leistung über den 12V-2x6-Stecker\nSumme der Pin-Ströme{scope} × 12-V-Spannung"),
+            (0, 1) => format!("Auslastung: Steckerleistung bezogen auf {} W Nennleistung je Stecker\nGelb ab 85 %, rot ab 100 %", num(lim.connector_rated_w)),
+            (1, 0) => format!("Summe der Pin-Ströme{scope}"),
+            (1, 1) => format!(
+                "Höchster Pin-Strom im Moment\n{}\nGelb ab {} A, rot ab {} A",
+                if both { "1.3 = Stecker 1, Pin 3" } else { "P3 = Pin 3" },
+                num(lim.pin_warn_a),
+                num(lim.pin_limit_a)
+            ),
+            (2, 0) => {
+                let worst = if both { "\nAngezeigt wird der höhere Wert beider Stecker." } else { "" };
+                match lim.imbalance_mode {
+                    ImbalanceMode::Amps => format!(
+                        "Schieflast: größter minus kleinster Pin-Strom\nGelb ab {} A, Alarm ab {} A{worst}",
+                        num(lim.imbalance_a * 0.5),
+                        num(lim.imbalance_a)
+                    ),
+                    ImbalanceMode::Percent => format!(
+                        "Schieflast: größte Abweichung eines Pins vom Mittelwert\nGelb ab {} %, Alarm ab {} %, bewertet ab {} A Steckerstrom{worst}",
+                        num(lim.imbalance_pct * 0.5),
+                        num(lim.imbalance_pct),
+                        num(lim.imbalance_min_load_a)
+                    ),
+                }
+            }
+            (2, 1) => format!("Leistungsaufnahme der Grafikkarte\n(Sensor „Power“ aus {})", v.source_name),
+            (3, 0) => "Gesamte Ausgangsleistung des Netzteils (DC-Seite)".to_string(),
+            (3, 1) => "Vom Netzteil gemeldeter Wirkungsgrad".to_string(),
+            (4, 0) => "Temperatur im Netzteil".to_string(),
+            _ => "Drehzahl des Netzteillüfters\n0 rpm: Lüfter steht".to_string(),
+        };
+        return hint(200 + (row * 2 + col) as u32, text);
+    }
+
+    // Rails
+    if (218.0..431.0).contains(&x) && (132.0..=157.0).contains(&y) {
+        let i = (((x - 218.0) / 71.0) as usize).min(2);
+        let name = ["12-V", "5-V", "3,3-V"][i];
+        return hint(220 + i as u32, format!("{name}-Schiene des Netzteils: Spannung · Strom"));
+    }
+    None
 }
 
 /// Zahl mit deutschem Dezimalkomma.
@@ -335,6 +519,17 @@ impl Painter<'_> {
         }
     }
 
+    /// Textbreite in Basiskoordinaten.
+    fn text_width(&self, s: &str, f: F) -> f32 {
+        let s: Vec<u16> = s.encode_utf16().collect();
+        let mut sz = SIZE::default();
+        unsafe {
+            SelectObject(self.dc, self.fonts[f as usize]);
+            let _ = GetTextExtentPoint32W(self.dc, &s, &mut sz);
+        }
+        sz.cx as f32 / self.px
+    }
+
     fn draw(&self, v: &View) {
         let snap = match v.reading {
             Reading::Data(s) => Some(s),
@@ -365,15 +560,12 @@ impl Painter<'_> {
     }
 
     fn draw_bars(&self, v: &View, stats: Option<&[ConnectorStats; 2]>, vis: &[usize]) {
-        let (top, bottom) = (30.0, 124.0);
-        let h = bottom - top;
+        let (top, bottom) = (BAR_TOP, BAR_BOTTOM);
         let lim = &v.config.limits;
-        let fs = lim.full_scale_a;
-        let y_of = |a: f32| bottom - (a.clamp(0.0, fs) / fs) * h;
-        let (x0, x1) = (14.0, 198.0);
+        let y_of = |a: f32| amp_y(lim, a);
+        let (x0, x1) = (BAR_X0, BAR_X1);
         let compact = vis.len() == 2;
-        let gap = if compact { 10.0 } else { 0.0 };
-        let group_w = (x1 - x0 - gap * (vis.len() as f32 - 1.0)) / vis.len() as f32;
+        let (group_w, gap) = bar_groups(vis.len());
 
         if compact {
             // Wie in MSI Center (GPU Safeguard+): je Stecker eine Klammer über
@@ -414,22 +606,38 @@ impl Painter<'_> {
                 } else {
                     self.text("–", F::Small, rect(bx - 8.0, 126.0, bx + bw + 8.0, 141.0), Align::Center, FAINT, 1.0);
                 }
-                // Peak seit Start / Reset
+                // Peak seit Start / Reset: dünne helle Linie, damit er sich vom
+                // Balken abhebt; im gelben/roten Bereich in Ampelfarbe.
                 let pk = v.monitor.peaks[c][p];
                 if pk > 0.05 {
                     let y = y_of(pk);
-                    self.fill(rect(bx - 1.0, y - 1.0, bx + bw + 1.0, y + 1.0), level_color(lim, pk), 0.55);
+                    let (pc, pa) = match lim.pin_level(pk) {
+                        0 => (TEXT, 0.8),
+                        _ => (level_color(lim, pk), 1.0),
+                    };
+                    self.fill(rect(bx - 1.0, y - 0.6, bx + bw + 1.0, y + 0.6), pc, pa);
                 }
-                self.text(&format!("{}", p + 1), F::Label, rect(bx - 6.0, 141.0, bx + bw + 6.0, 155.0), Align::Center, FAINT, 1.0);
+                self.text(&format!("{}", p + 1), F::Label, rect(bx - 6.0, 141.0, bx + bw + 6.0, 155.0), Align::Center, PIN_NO, 1.0);
             }
         }
         // Rot-Grenze (Überstrom) und Gelb-Markierung
         let yl = y_of(lim.pin_limit_a);
         self.fill(rect(x0 - 3.0, yl - 0.6, x1 + 3.0, yl + 0.6), RED, 0.9);
         let yw = y_of(lim.pin_warn_a);
-        self.fill(rect(x0 - 3.0, yw - 0.4, x1 + 3.0, yw + 0.4), YELLOW, 0.25);
-        let ly = yl.max(top + 12.0);
-        self.text(&format!("{} A", de(lim.pin_limit_a, 1)), F::Label, rect(140.0, ly - 13.0, x1 + 3.0, ly - 1.0), Align::Right, RED, 0.85);
+        self.fill(rect(x0 - 3.0, yw - 0.4, x1 + 3.0, yw + 0.4), YELLOW, 0.55);
+        let lbl = format!("{} A", de(lim.pin_limit_a, 1));
+        let lw = self.text_width(&lbl, F::Label);
+        if compact {
+            // Die Titelzeile gehört den Klammern: Beschriftung bleibt an der
+            // Linie, aber hinterlegt, damit Peaks sie nicht durchstreichen.
+            let ly = yl.max(top + 12.0);
+            self.fill_round(rect(x1 - lw - 3.0, ly - 13.0, x1 + 3.0, ly - 1.5), 2.0, PANEL, 0.9);
+            self.text(&lbl, F::Label, rect(140.0, ly - 13.0, x1, ly - 1.0), Align::Right, RED, 1.0);
+        } else {
+            // Als Legende in die Titelzeile, frei von Balken und Peaks.
+            self.fill(rect(x1 - lw - 11.0, 16.4, x1 - lw - 3.0, 17.6), RED, 0.9);
+            self.text(&lbl, F::Label, rect(140.0, 9.0, x1 + 3.0, 25.0), Align::Right, RED, 1.0);
+        }
     }
 
     fn cell(&self, col: usize, row: usize, label: &str, value: &str, vcol: u32) {
@@ -478,18 +686,14 @@ impl Painter<'_> {
         let (max_txt, max_col) = match sel {
             Some((_, _, mx, c, p, _, _)) => {
                 let pin = if vis.len() == 2 { format!("{}.{}", c + 1, p + 1) } else { format!("P{}", p + 1) };
-                (format!("{} A {}", de(mx, 1), pin), level_color(lim, mx))
+                (format!("{} A {}", de(mx, 1), pin), value_color(lim.pin_level(mx)))
             }
             None => ("–".into(), TEXT),
         };
         self.cell(1, 1, "Max", &max_txt, max_col);
         // Schieflast in der gewählten Messart; Farbe wie die Alarmbewertung
         // (bei Prozent erst ab Mindestlast).
-        let imb_col = match sel.map(|s| s.6) {
-            Some(2) => RED,
-            Some(1) => YELLOW,
-            _ => TEXT,
-        };
+        let imb_col = value_color(sel.map_or(0, |s| s.6));
         let (imb_label, imb_txt) = match lim.imbalance_mode {
             ImbalanceMode::Amps => ("Δ Pins", opt(sel.map(|s| s.5), 2, "A")),
             ImbalanceMode::Percent => ("Abw.", opt(sel.map(|s| s.5), 0, "%")),
@@ -516,26 +720,13 @@ impl Painter<'_> {
     }
 
     fn draw_status(&self, v: &View) {
-        let chips = [
-            (Fault::Alarm1, "ALARM S1"),
-            (Fault::Alarm2, "ALARM S2"),
-            (Fault::OverCurrent, "ÜBERSTROM"),
-            (Fault::Imbalance, "SCHIEFLAST"),
-            (Fault::NoData, "VERBINDUNG"),
-        ];
-        let chips: Vec<_> = chips.iter().filter(|(f, _)| v.monitor.show_fault(*f)).collect();
-        let (x0, x1, gap) = (6.0, 434.0, 5.0);
-        let n = chips.len() as f32;
-        let cw = (x1 - x0 - gap * (n - 1.0)) / n;
-        for (i, (f, label)) in chips.iter().enumerate() {
-            let x = x0 + i as f32 * (cw + gap);
-            let r = rect(x, STATUS_Y0, x + cw, STATUS_Y1);
-            let st = v.monitor.fault(*f);
-            if !v.config.alarm(*f).enabled {
+        for (f, label, r) in visible_chips(v) {
+            let st = v.monitor.fault(f);
+            if !v.config.alarm(f).enabled {
                 // Alarm abgeschaltet: nur blass, ohne Statuspunkt
                 self.fill_round(r, 4.0, PANEL, 1.0);
                 self.text(label, F::Chip, r, Align::Center, FAINT, 1.0);
-            } else             if st.active {
+            } else if st.active {
                 self.fill_round(r, 4.0, RED, 1.0);
                 self.text(label, F::Chip, r, Align::Center, 0xFFFFFF, 1.0);
             } else if st.latched {
@@ -544,9 +735,58 @@ impl Painter<'_> {
                 self.text(label, F::Chip, r, Align::Center, AMBER, 1.0);
             } else {
                 self.fill_round(r, 4.0, PANEL, 1.0);
-                self.fill_round(rect(r.left + 5.0, r.top + 10.0, r.left + 9.0, r.top + 14.0), 2.0, GREEN, 0.8);
-                self.text(label, F::Chip, rect(r.left + 10.0, r.top, r.right - 1.0, r.bottom), Align::Center, DIM, 1.0);
+                // Punkt und Text gemeinsam zentrieren
+                let x = (r.left + r.right - (self.text_width(label, F::Chip) + 9.0)) / 2.0;
+                self.fill_round(rect(x, r.top + 10.0, x + 4.0, r.top + 14.0), 2.0, GREEN, 0.8);
+                self.text(label, F::Chip, rect(x + 9.0, r.top, r.right, r.bottom), Align::Left, DIM, 1.0);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot() -> PsuSnapshot {
+        let mut s = PsuSnapshot::default();
+        for p in 0..PINS {
+            s.vals[idx::PIN0 + p] = Some(6.0 + p as f32 * 0.1);
+            s.vals[idx::PIN0 + PINS + p] = Some(0.0);
+        }
+        s.vals[idx::V12] = Some(12.0);
+        s
+    }
+
+    #[test]
+    fn hints() {
+        let (cfg, mut mon) = (Config::default(), Monitor::default());
+        let reading = Reading::Data(snapshot());
+        mon.update(Some(&snapshot()), &cfg);
+        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test" };
+
+        // Pin 3 von Stecker 1: Wert und Peak, gleiche id im ganzen Balken
+        let h = hint_at(88.0, 100.0, &v).unwrap();
+        assert_eq!(h.id, 102);
+        assert!(h.text.contains("Pin 3") && h.text.contains("6,20 A"));
+        assert_eq!(hint_at(90.0, 150.0, &v).unwrap().id, 102);
+        // Grenzlinien haben Vorrang vor dem Balken darunter
+        assert_eq!(hint_at(88.0, amp_y(&cfg.limits, 9.2), &v).unwrap().id, 1);
+        assert_eq!(hint_at(88.0, amp_y(&cfg.limits, 8.0), &v).unwrap().id, 2);
+        // Kennzahlen und Rails
+        assert!(hint_at(380.0, 46.0, &v).unwrap().text.contains("P3 = Pin 3"));
+        assert!(hint_at(250.0, 150.0, &v).unwrap().text.starts_with("12-V"));
+        // Statuszeile: ALARM S2 ist ausgeblendet, vier Felder
+        assert!(hint_at(60.0, 178.0, &v).unwrap().text.ends_with("In Ordnung."));
+        assert_eq!(hint_at(420.0, 178.0, &v).unwrap().id, 300 + Fault::NoData as u32);
+        // zwischen den Panels und außerhalb: nichts
+        assert!(hint_at(209.0, 100.0, &v).is_none());
+        assert!(hint_at(-5.0, 100.0, &v).is_none());
+
+        // ohne Daten nur die Statuszeile
+        let off = Reading::Offline;
+        let v = View { reading: &off, monitor: &mon, config: &cfg, source_name: "Test" };
+        assert!(hint_at(88.0, 100.0, &v).is_none());
+        assert!(hint_at(420.0, 178.0, &v).is_some());
     }
 }
