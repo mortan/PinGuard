@@ -8,11 +8,13 @@ use std::time::Instant;
 
 pub struct MockSource {
     start: Instant,
+    /// Zweiter Stecker führt ebenfalls Strom (`--mock2`).
+    dual: bool,
 }
 
 impl MockSource {
-    pub fn new() -> Self {
-        MockSource { start: Instant::now() }
+    pub fn new(dual: bool) -> Self {
+        MockSource { start: Instant::now(), dual }
     }
 }
 
@@ -36,9 +38,10 @@ impl PsuSource for MockSource {
                 v += 1.6;
             }
             s.vals[idx::PIN0 + p] = Some(v.max(0.0));
-            s.vals[idx::PIN0 + 6 + p] = Some(0.0);
+            let v2 = if self.dual { (v * 0.85 + [0.2, -0.1, 0.0, 0.3, -0.2, 0.1][p]).max(0.0) } else { 0.0 };
+            s.vals[idx::PIN0 + 6 + p] = Some(v2);
         }
-        let pins: f32 = s.vals[..6].iter().map(|v| v.unwrap()).sum();
+        let pins: f32 = s.vals[..12].iter().map(|v| v.unwrap()).sum();
         let a12 = pins + 4.0;
         s.vals[idx::ALARM0] = Some(if (45.0..48.0).contains(&t) { 1.0 } else { 0.0 });
         s.vals[idx::ALARM0 + 1] = Some(0.0);

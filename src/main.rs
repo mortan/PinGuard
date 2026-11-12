@@ -2,7 +2,7 @@
 //!
 //! Win32-Fenster ohne Rahmen, GDI/GDI+-Zeichnen nur bei neuen Daten.
 //! Aufruf: `gpumon.exe [--mock] [--topmost]`
-//!   --mock     Fake-Daten statt Afterburner
+//!   --mock     Fake-Daten statt Afterburner (--mock2: beide Stecker belegt)
 //!   --topmost  immer im Vordergrund (wird auch über das Kontextmenü gemerkt)
 
 #![windows_subsystem = "windows"]
@@ -288,7 +288,7 @@ fn main() -> Result<()> {
         if has("--topmost") {
             settings.topmost = true;
         }
-        let source: Box<dyn PsuSource> = if has("--mock") { Box::new(MockSource::new()) } else {
+        let source: Box<dyn PsuSource> = if has("--mock") || has("--mock2") { Box::new(MockSource::new(has("--mock2"))) } else {
             let name = args.iter().position(|a| a == "--mahm-name").and_then(|i| args.get(i + 1));
             Box::new(MahmSource::new(name.map_or(MahmSource::DEFAULT_NAME, |s| s.as_str())))
         };

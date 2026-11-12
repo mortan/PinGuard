@@ -100,8 +100,10 @@ enum F {
     Title,
     Chip,
     Msg,
+    /// Pinwerte in der Zwei-Stecker-Ansicht
+    Tiny,
 }
-const FONT_SPECS: [(f32, i32); 6] = [(10.0, 400), (14.0, 600), (10.5, 600), (11.0, 600), (9.5, 700), (13.0, 600)];
+const FONT_SPECS: [(f32, i32); 7] = [(10.0, 400), (14.0, 600), (10.5, 600), (11.0, 600), (9.5, 700), (13.0, 600), (8.5, 600)];
 
 pub struct Renderer {
     gdip_token: usize,
@@ -362,20 +364,31 @@ impl Painter<'_> {
     }
 
     fn draw_bars(&self, v: &View, stats: Option<&[ConnectorStats; 2]>, vis: &[usize]) {
-        let title = if vis.len() == 2 {
-            "12V-2x6 · Stecker 1 + 2".to_string()
-        } else {
-            format!("12V-2x6 · Stecker {}", vis[0] + 1)
-        };
-        self.text(&title, F::Title, rect(14.0, 9.0, 200.0, 25.0), Align::Left, DIM, 1.0);
-
         let (top, bottom) = (30.0, 124.0);
         let h = bottom - top;
         let y_of = |a: f32| bottom - (a.clamp(0.0, PIN_FULL_SCALE_A) / PIN_FULL_SCALE_A) * h;
         let (x0, x1) = (14.0, 198.0);
-        let gap = 8.0;
-        let group_w = (x1 - x0 - gap * (vis.len() as f32 - 1.0)) / vis.len() as f32;
         let compact = vis.len() == 2;
+        let gap = if compact { 10.0 } else { 0.0 };
+        let group_w = (x1 - x0 - gap * (vis.len() as f32 - 1.0)) / vis.len() as f32;
+
+        if compact {
+            // Wie in MSI Center (GPU Safeguard+): je Stecker eine Klammer über
+            // seinen sechs Pins, beschriftet mit der Steckernummer.
+            for (g, &c) in vis.iter().enumerate() {
+                let (l, r) = (x0 + g as f32 * (group_w + gap) + 1.0, x0 + g as f32 * (group_w + gap) + group_w - 1.0);
+                let mid = (l + r) / 2.0;
+                let (yl, half) = (17.0, 27.0);
+                self.fill(rect(l, yl - 0.5, mid - half, yl + 0.5), FAINT, 1.0);
+                self.fill(rect(mid + half, yl - 0.5, r, yl + 0.5), FAINT, 1.0);
+                self.fill(rect(l, yl - 0.5, l + 1.0, 26.0), FAINT, 1.0);
+                self.fill(rect(r - 1.0, yl - 0.5, r, 26.0), FAINT, 1.0);
+                self.text(&format!("Stecker {}", c + 1), F::Title, rect(mid - half, 9.0, mid + half, 25.0), Align::Center, DIM, 1.0);
+            }
+        } else {
+            let title = format!("12V-2x6 · Stecker {}", vis[0] + 1);
+            self.text(&title, F::Title, rect(14.0, 9.0, 200.0, 25.0), Align::Left, DIM, 1.0);
+        }
 
         for (g, &c) in vis.iter().enumerate() {
             let gx = x0 + g as f32 * (group_w + gap);
@@ -393,7 +406,7 @@ impl Painter<'_> {
                         self.fill_round(rect(bx, y, bx + bw, bottom), 2.0, col, 1.0);
                     }
                     let txt = de(a, if compact { 1 } else { 2 });
-                    let f = if compact { F::Label } else { F::Small };
+                    let f = if compact { F::Tiny } else { F::Small };
                     self.text(&txt, f, rect(bx - 8.0, 126.0, bx + bw + 8.0, 141.0), Align::Center, col, 1.0);
                 } else {
                     self.text("–", F::Small, rect(bx - 8.0, 126.0, bx + bw + 8.0, 141.0), Align::Center, FAINT, 1.0);
