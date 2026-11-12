@@ -118,7 +118,17 @@ pub struct Texts {
     pub menu_topmost: &'static str,
     pub menu_language: &'static str,
     pub menu_lang_auto: &'static str,
+    pub menu_event_log: &'static str,
+    pub menu_log_record: &'static str,
+    pub menu_log_open: &'static str,
+    pub menu_tray: &'static str,
+    pub menu_autostart: &'static str,
     pub menu_exit: &'static str,
+
+    // Fensterknöpfe (Tooltips)
+    pub btn_minimize: &'static str,
+    pub btn_minimize_tray: &'static str,
+    pub btn_close: &'static str,
 
     // Hauptfenster
     /// "Stecker" in Panel-Titel und Klammern ("Stecker 1")
@@ -126,6 +136,8 @@ pub struct Texts {
     /// Gruppenüberschriften im Kennzahlen-Panel
     pub head_conn: &'static str,
     pub head_psu: &'static str,
+    /// Überschrift der Verlaufskurve (ersetzt "Netzteil")
+    pub head_hist: &'static str,
     /// Statusfelder in `Fault`-Reihenfolge
     pub chips: [&'static str; FAULT_COUNT],
     // Kennzahl-Labels (kurz: ca. 50 Basiseinheiten bei 10er-Schrift)
@@ -170,6 +182,7 @@ pub struct Texts {
     pub alarm_note: &'static str,
     pub disp_conn: &'static str,
     pub disp_psu: &'static str,
+    pub disp_bars: &'static str,
     pub load_note: &'static str,
     pub btn_defaults: &'static str,
     pub btn_cancel: &'static str,
@@ -196,11 +209,20 @@ static DE: Texts = Texts {
     menu_topmost: "Immer im Vordergrund",
     menu_language: "Sprache",
     menu_lang_auto: "Automatisch (Windows)",
+    menu_event_log: "Ereignis-Log",
+    menu_log_record: "Alarme aufzeichnen (events.csv)",
+    menu_log_open: "Ordner öffnen",
+    menu_tray: "In den Infobereich minimieren",
+    menu_autostart: "Mit Windows starten",
     menu_exit: "Beenden",
+    btn_minimize: "Minimieren",
+    btn_minimize_tray: "In den Infobereich minimieren",
+    btn_close: "Beenden",
 
     connector: "Stecker",
     head_conn: "STECKER",
     head_psu: "NETZTEIL",
+    head_hist: "VERLAUF · 2 MIN",
     chips: ["ALARM S1", "ALARM S2", "ÜBERSTROM", "SCHIEFLAST", "VERBINDUNG"],
     lbl_power: "Leistung",
     lbl_sum: "Σ Strom",
@@ -246,6 +268,7 @@ static DE: Texts = Texts {
     alarm_note: "Halten: bleibt orange markiert, bis die Statuszeile angeklickt wird.\nZeigen: Fenster wiederherstellen, nach vorne holen und blinken.",
     disp_conn: "Stecker",
     disp_psu: "Netzteil",
+    disp_bars: "Balken",
     load_note: "Auslastung bezieht sich auf die Nennleistung je Stecker.",
     btn_defaults: "Standardwerte",
     btn_cancel: "Abbrechen",
@@ -263,6 +286,9 @@ static DE: Texts = Texts {
         "Temperatur",
         "Lüfter",
         "Spannungsschienen",
+        "Verlauf stattdessen",
+        "Mittelwert-Linie",
+        "Warnlinie (gelb)",
     ],
 
     err_warn_range: "Gelb-Grenze muss zwischen 0,1 und 50 A liegen.",
@@ -282,11 +308,20 @@ static EN: Texts = Texts {
     menu_topmost: "Always on top",
     menu_language: "Language",
     menu_lang_auto: "Automatic (Windows)",
+    menu_event_log: "Event log",
+    menu_log_record: "Record alarms (events.csv)",
+    menu_log_open: "Open folder",
+    menu_tray: "Minimize to notification area",
+    menu_autostart: "Start with Windows",
     menu_exit: "Exit",
+    btn_minimize: "Minimize",
+    btn_minimize_tray: "Minimize to tray",
+    btn_close: "Exit",
 
     connector: "Connector",
     head_conn: "CONNECTOR",
     head_psu: "PSU",
+    head_hist: "HISTORY · 2 MIN",
     chips: ["ALARM C1", "ALARM C2", "OVERCURRENT", "IMBALANCE", "LINK"],
     lbl_power: "Power",
     lbl_sum: "Σ Amps",
@@ -332,6 +367,7 @@ static EN: Texts = Texts {
     alarm_note: "Latch: stays marked orange until the status bar is clicked.\nShow: restore the window, bring it to the front and flash.",
     disp_conn: "Connector",
     disp_psu: "PSU",
+    disp_bars: "Bars",
     load_note: "Load refers to the rated power per connector.",
     btn_defaults: "Defaults",
     btn_cancel: "Cancel",
@@ -349,6 +385,9 @@ static EN: Texts = Texts {
         "Temperature",
         "Fan",
         "Voltage rails",
+        "History instead",
+        "Mean line",
+        "Warning line (yellow)",
     ],
 
     err_warn_range: "Yellow limit must be between 0.1 and 50 A.",
@@ -423,6 +462,24 @@ pub fn tip_pin_warn(a: &str) -> String {
     pick(format!("Warnschwelle: {a} A je Pin\nAb hier wird der Pin gelb."), format!("Warning threshold: {a} A per pin\nAt this level the pin turns yellow."))
 }
 
+/// Mittelwert-Linie; `conn` nur in der Zwei-Stecker-Ansicht (1-basiert),
+/// `mean` fertig formatiert ohne Einheit.
+pub fn tip_mean(conn: Option<usize>, mean: &str) -> String {
+    let (of_de, of_en) = match conn {
+        Some(c) => (format!(" von Stecker {c}"), format!(" of connector {c}")),
+        None => (String::new(), String::new()),
+    };
+    pick(
+        format!("Mittelwert der sechs Pins{of_de}: {mean} A\nGestrichelte Linie; bei gleichmäßiger Last enden alle Balken nahe daran."),
+        format!("Mean of the six pins{of_en}: {mean} A\nDashed line; with an even load all bars end close to it."),
+    )
+}
+
+/// Legende der Mittelwert-Linie in der Titelzeile; `mean` ohne Einheit.
+pub fn mean_legend(mean: &str) -> String {
+    pick(format!("Ø {mean} A"), format!("Ø {mean} A"))
+}
+
 /// Ein Pin-Balken; `now` ist der fertige Wert ("6,20 A" oder "keine Daten").
 pub fn tip_pin(conn: usize, pin: usize, now: &str, peak: &str) -> String {
     pick(
@@ -439,11 +496,12 @@ fn scope(both: bool) -> &'static str {
     }
 }
 
-pub fn tip_conn_w(both: bool) -> String {
+/// Steckerleistung; `peak` = höchster Wert seit Start/Reset mit Einheit.
+pub fn tip_conn_w(both: bool, peak: &str) -> String {
     let s = scope(both);
     pick(
-        format!("Leistung über den 12V-2x6-Stecker\nSumme der Pin-Ströme{s} × 12-V-Spannung"),
-        format!("Power through the 12V-2x6 connector\nSum of pin currents{s} × 12 V voltage"),
+        format!("Leistung über den 12V-2x6-Stecker\nSumme der Pin-Ströme{s} × 12-V-Spannung\nPeak seit Start: {peak} (Doppelklick setzt zurück)"),
+        format!("Power through the 12V-2x6 connector\nSum of pin currents{s} × 12 V voltage\nPeak since start: {peak} (double-click resets)"),
     )
 }
 
@@ -496,6 +554,66 @@ pub fn tip_gpu(source: &str) -> String {
         format!("Leistungsaufnahme der Grafikkarte\n(Sensor „Power“ aus {source})"),
         format!("Power draw of the graphics card\n(sensor “Power” from {source})"),
     )
+}
+
+/// Verlaufskurve; Werte fertig mit Einheit, `peak` mit Alter in Sekunden.
+pub fn tip_history(now: &str, peak: Option<(&str, u64)>, scale: &str) -> String {
+    let (pk_de, pk_en) = match peak {
+        Some((w, 0)) => (format!("Peak: {w} (gerade eben)"), format!("Peak: {w} (just now)")),
+        Some((w, s)) => (format!("Peak: {w} (vor {})", duration(s)), format!("Peak: {w} ({} ago)", duration(s))),
+        None => ("Peak: –".to_string(), "Peak: –".to_string()),
+    };
+    pick(
+        format!("Steckerleistung der letzten 2 Minuten\nAktuell: {now}\n{pk_de}\nSkala 0–{scale} W, Lücke = keine Daten"),
+        format!("Connector power over the last 2 minutes\nNow: {now}\n{pk_en}\nScale 0–{scale} W, gap = no data"),
+    )
+}
+
+/// Alarm-Gedächtnis im Tooltip: Uhrzeit ("14:32"), schlimmster Wert (fertig
+/// formatiert, siehe `memo_pin`/`memo_peak`) und Dauer in Sekunden.
+pub fn memo_line(time: &str, worst: Option<&str>, secs: u64) -> String {
+    let d = duration(secs);
+    match worst {
+        Some(w) => pick(format!("Ausgelöst {time} Uhr, {w}, Dauer {d}"), format!("Triggered {time}, {w}, duration {d}")),
+        None => pick(format!("Ausgelöst {time} Uhr, Dauer {d}"), format!("Triggered {time}, duration {d}")),
+    }
+}
+
+/// Höchster Pin-Strom eines Alarms; `conn` nur, wenn der Stecker genannt
+/// werden soll (1-basiert), `amps` fertig formatiert.
+pub fn memo_pin(conn: Option<usize>, pin: usize, amps: &str) -> String {
+    match conn {
+        Some(c) => pick(format!("Stecker {c} Pin {pin}: {amps} A"), format!("connector {c} pin {pin}: {amps} A")),
+        None => pick(format!("Pin {pin}: {amps} A"), format!("pin {pin}: {amps} A")),
+    }
+}
+
+/// Höchster Wert eines Alarms mit Einheit ("3,40 A", "42 %").
+pub fn memo_peak(value: &str) -> String {
+    pick(format!("Spitze {value}"), format!("peak {value}"))
+}
+
+/// Tooltip des Tray-Symbols: Steckerleistung und höchster Pin (fertig
+/// formatiert, `pin` wie im Panel: "P3" bzw. "1.3").
+pub fn tray_values(watts: &str, amps: &str, pin: &str) -> String {
+    pick(format!("Stecker {watts} · Max {amps} ({pin})"), format!("Connector {watts} · max {amps} ({pin})"))
+}
+
+/// Markierung des höchsten Werts in der Kurve; `w` ohne Einheit.
+pub fn chart_peak(w: &str) -> String {
+    pick(format!("Peak {w} W"), format!("Peak {w} W"))
+}
+
+/// Dauer in Sekunden, kurz: "4 s", "2 min 5 s", "1 h 3 min".
+pub fn duration(secs: u64) -> String {
+    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+    if h > 0 {
+        format!("{h} h {m} min")
+    } else if m > 0 {
+        format!("{m} min {s} s")
+    } else {
+        format!("{s} s")
+    }
 }
 
 /// Spannungsschiene; `volts` ist die Nennspannung ohne Einheit ("3,3").

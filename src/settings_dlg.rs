@@ -4,8 +4,7 @@
 //! Tab-Navigation, Enter/Esc und DPI-Skalierung ohne Ressourcendatei.
 
 use crate::i18n::{short, t};
-use crate::model::{field, AlarmCfg, Config, ImbalanceMode, Limits, Metric, CONNECTOR_METRICS, FAULTS, FAULT_COUNT, METRICS, METRIC_COUNT, PSU_METRICS};
-use crate::settings::parse_num;
+use crate::model::{field, AlarmCfg, Config, ImbalanceMode, Limits, Metric, CONNECTOR_METRICS, FAULTS, FAULT_COUNT, METRICS, METRIC_COUNT, PSU_METRICS};use crate::settings::parse_num;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::HFONT;
@@ -42,7 +41,7 @@ const ID_SHOW0: i32 = 400; // je `Metric` ein Kästchen
 /// Breite der linken Spalte (Grenzwerte, Alarme); rechts daneben "Anzeige".
 const LEFT_W: i32 = 262;
 const DLG_W: i16 = 372;
-const DLG_H: i16 = 293;
+const DLG_H: i16 = 319;
 
 /// Zeilen der Gruppe "Grenzwerte": Einheit, Feldindex (`None` = Auswahl der
 /// Schieflast-Messart). Die Beschriftungen stehen in `Texts::limit_rows`.
@@ -183,6 +182,11 @@ unsafe fn update_enabled(dlg: HWND) {
     enable(dlg, ID_LIMIT0 + field::IMB_A as i32, !pct);
     enable(dlg, ID_LIMIT0 + field::IMB_PCT as i32, pct);
     enable(dlg, ID_LIMIT0 + field::IMB_MIN_LOAD as i32, pct);
+    // Netzteil-Kennzahlen entfallen, solange die Verlaufskurve gezeigt wird.
+    let hist = get_check(dlg, ID_SHOW0 + Metric::History as i32);
+    for m in PSU_METRICS {
+        enable(dlg, ID_SHOW0 + m as i32, !hist);
+    }
 }
 
 /// Liest den Dialog aus. Bei ungültigen Werten: Meldung, Fokus auf das Feld.
@@ -265,7 +269,9 @@ unsafe fn init(dlg: HWND, ctx: &Ctx) {
 
     // Alarme
     let gy = 13 + 17 + rows * 15;
-    ctl(dlg, f, bt, tx.grp_alarms, BS_GROUPBOX, 7, gy, LEFT_W - 14, 114, -1);
+    // Unterkante beider Spalten gemeinsam über den Knöpfen
+    let bottom = DLG_H as i32 - 29;
+    ctl(dlg, f, bt, tx.grp_alarms, BS_GROUPBOX, 7, gy, LEFT_W - 14, bottom - gy, -1);
     for (ci, name) in tx.alarm_cols.iter().enumerate() {
         ctl(dlg, f, st, name, SS_CENTER, COL_X[ci] - 8, gy + 12, 26, 9, -1);
     }
@@ -292,9 +298,16 @@ unsafe fn init(dlg: HWND, ctx: &Ctx) {
 
     // Anzeige: welche Kennzahlen das rechte Panel zeigt
     let ax = LEFT_W - 2;
-    ctl(dlg, f, bt, tx.grp_display, BS_GROUPBOX, ax, 5, DLG_W as i32 - 7 - ax, gy + 114 - 5, -1);
+    ctl(dlg, f, bt, tx.grp_display, BS_GROUPBOX, ax, 5, DLG_W as i32 - 7 - ax, bottom - 5, -1);
     let mut y = 19;
-    let groups: [(&str, &[Metric]); 3] = [(tx.disp_conn, &CONNECTOR_METRICS), (tx.disp_psu, &PSU_METRICS), ("", &[Metric::Rails])];
+    // Die Verlaufskurve steht bei „Netzteil“, weil sie diese Gruppe ersetzt.
+    let psu: [Metric; 5] = [PSU_METRICS[0], PSU_METRICS[1], PSU_METRICS[2], PSU_METRICS[3], Metric::History];
+    let groups: [(&str, &[Metric]); 4] = [
+        (tx.disp_conn, &CONNECTOR_METRICS),
+        (tx.disp_psu, &psu),
+        ("", &[Metric::Rails]),
+        (tx.disp_bars, &[Metric::WarnLine, Metric::MeanLine]),
+    ];
     for (name, ms) in groups {
         if !name.is_empty() {
             ctl(dlg, f, st, name, SS_LEFT, ax + 8, y, 80, 9, -1);
@@ -345,6 +358,7 @@ unsafe extern "system" fn dlg_proc(dlg: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 ID_DEFAULTS => fill(dlg, &Config::default()),
                 x if (ID_ALARM0..ID_ALARM0 + 4 * FAULT_COUNT as i32).contains(&x) && (x - ID_ALARM0) % 4 == 0 => update_enabled(dlg),
                 ID_IMB_MODE if (wp.0 >> 16) as u32 == CBN_SELCHANGE => update_enabled(dlg),
+                x if x == ID_SHOW0 + Metric::History as i32 => update_enabled(dlg),
                 _ => return 0,
             }
             1

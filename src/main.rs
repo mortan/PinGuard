@@ -7,6 +7,8 @@
 
 #![windows_subsystem = "windows"]
 
+mod autostart;
+mod events;
 mod i18n;
 mod model;
 mod render;
@@ -14,6 +16,7 @@ mod settings;
 mod settings_dlg;
 mod source;
 mod tip;
+mod tray;
 
 use i18n::{Lang, LangPref};
 use model::Monitor;
@@ -48,6 +51,10 @@ const CMD_SETTINGS: usize = 5;
 /// Sprache: Auto, Deutsch, English (zusammenhängend, für `CheckMenuRadioItem`)
 const CMD_LANG0: usize = 6;
 const LANG_PREFS: [LangPref; 3] = [LangPref::Auto, LangPref::De, LangPref::En];
+const CMD_LOG_RECORD: usize = 10;
+const CMD_LOG_OPEN: usize = 11;
+const CMD_TRAY: usize = 12;
+const CMD_AUTOSTART: usize = 13;
 const CLASS: PCWSTR = w!("GpuMonWindow");
 
 struct App {
@@ -61,23 +68,74 @@ struct App {
     /// Bereich (`Hint::id`) unter der Maus und die Stelle in Basiskoordinaten.
     tip_region: Option<u32>,
     tip_base: (f32, f32),
+    tray: tray::Tray,
+    /// Registrierte Nachricht `TaskbarCreated` (Explorer neu gestartet)
+    taskbar_msg: u32,
 }
 
 impl App {
     fn tick(&mut self, hwnd: HWND) {
         let r = self.source.poll();
-        if r != self.reading {
+        let changed = r != self.reading;
+        if changed {
             self.reading = r;
             let raised = self.update_monitor();
+            self.log_events(raised);
             self.signal(hwnd, raised);
-            self.invalidate(hwnd);
-            self.tip_refresh(hwnd);
         }
+        // Verlauf je Sekunde aufnehmen, auch wenn sich nichts ändert (die
+        // Kurve wandert weiter); neu zeichnen nur, wenn sie zu sehen ist.
+        let snap = match &self.reading {
+            Reading::Data(s) => Some(s),
+            _ => None,
+        };
+        let moved = self.monitor.record_power(now_ms() / 1000, snap) && self.settings.config.shows(model::Metric::History);
+        if changed || moved {
+            self.invalidate(hwnd);
+        }
+        // Sichtbaren Tooltip auch ohne neue Daten nachführen (Dauer eines
+        // aktiven Alarms läuft weiter); ohne Tooltip kostet das nichts.
+        self.tip_refresh(hwnd);
     }
 
     fn hint_at(&self, bx: f32, by: f32) -> Option<render::Hint> {
-        let view = View { reading: &self.reading, monitor: &self.monitor, config: &self.settings.config, source_name: self.source.name() };
+        if let Some(b) = self.button_at(bx, by) {
+            let tx = i18n::t();
+            let text = match b {
+                render::WinButton::Minimize if self.settings.tray => tx.btn_minimize_tray,
+                render::WinButton::Minimize => tx.btn_minimize,
+                render::WinButton::Close => tx.btn_close,
+            };
+            return Some(render::Hint { id: 400 + b as u32, text: text.to_string() });
+        }
+        let view = View { reading: &self.reading, monitor: &self.monitor, config: &self.settings.config, source_name: self.source.name(), now_ms: now_ms(), mean_legend: self.renderer.mean_legend };
         render::hint_at(bx, by, &view)
+    }
+
+    /// Fensterknopf an dieser Stelle, falls die Knöpfe gerade zu sehen sind.
+    fn button_at(&self, bx: f32, by: f32) -> Option<render::WinButton> {
+        if self.renderer.chrome.shown {
+            render::button_at(bx, by)
+        } else {
+            None
+        }
+    }
+
+    /// Fensterknöpfe ein-/ausblenden und den Knopf unter der Maus
+    /// hervorheben; zeichnet nur bei einer Änderung neu.
+    fn update_chrome(&mut self, hwnd: HWND) {
+        let chrome = match self.cursor(hwnd) {
+            Some((_, (bx, by))) => render::Chrome { shown: true, hot: render::button_at(bx, by) },
+            None => render::Chrome::default(),
+        };
+        if chrome != self.renderer.chrome {
+            self.renderer.chrome = chrome;
+            if !self.minimized {
+                unsafe {
+                    let _ = InvalidateRect(hwnd, None, false);
+                }
+            }
+        }
     }
 
     /// Mauszeiger (Bildschirm- und Basiskoordinaten), falls er über dem
@@ -167,7 +225,21 @@ impl App {
             Reading::Data(s) => Some(s),
             _ => None,
         };
-        self.monitor.update(snap, &self.settings.config)
+        self.monitor.update_at(snap, &self.settings.config, now())
+    }
+
+    /// Neu aufgetretene Alarme ins Ereignis-Log (falls eingeschaltet).
+    fn log_events(&self, raised: [bool; model::FAULT_COUNT]) {
+        if !self.settings.event_log || !raised.iter().any(|r| *r) {
+            return;
+        }
+        let snap = match &self.reading {
+            Reading::Data(s) => Some(s),
+            _ => None,
+        };
+        let at = now().local;
+        let lines: Vec<String> = model::FAULTS.iter().filter(|f| raised[**f as usize]).map(|f| events::line(&at, *f, snap)).collect();
+        events::log(&lines);
     }
 
     /// Ton bzw. Fenster nach vorne für neu aufgetretene Alarme.
@@ -179,7 +251,9 @@ impl App {
                 let _ = MessageBeep(MB_ICONWARNING);
             }
             if any(|a| a.show) {
-                if IsIconic(hwnd).as_bool() {
+                // Auch aus dem Infobereich: dort ist das Fenster minimiert
+                // und zusätzlich ausgeblendet.
+                if IsIconic(hwnd).as_bool() || !IsWindowVisible(hwnd).as_bool() {
                     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
                 }
                 // Nach vorne, ohne dem Spiel den Fokus zu nehmen.
@@ -200,7 +274,36 @@ impl App {
         }
     }
 
-    fn invalidate(&self, hwnd: HWND) {
+    /// Tray-Symbol an Zustand und Option anpassen (setzt nur bei Änderung).
+    fn sync_tray(&mut self) {
+        if !self.settings.tray {
+            self.tray.remove();
+            return;
+        }
+        let snap = match &self.reading {
+            Reading::Data(s) => Some(s),
+            _ => None,
+        };
+        let status = self.monitor.status(snap, &self.settings.config);
+        let view = View { reading: &self.reading, monitor: &self.monitor, config: &self.settings.config, source_name: self.source.name(), now_ms: now_ms(), mean_legend: self.renderer.mean_legend };
+        let tip = render::tray_tip(&view);
+        self.tray.set(status, &tip);
+    }
+
+    /// Fenster aus Taskleiste/Infobereich wiederherstellen und nach vorne holen.
+    fn restore(&mut self, hwnd: HWND) {
+        unsafe {
+            if IsIconic(hwnd).as_bool() || !IsWindowVisible(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+            }
+            let _ = SetForegroundWindow(hwnd);
+        }
+    }
+
+    /// Nach einer Zustandsänderung: neu zeichnen (falls sichtbar) und das
+    /// Tray-Symbol nachführen.
+    fn invalidate(&mut self, hwnd: HWND) {
+        self.sync_tray();
         if !self.minimized {
             unsafe {
                 let _ = InvalidateRect(hwnd, None, false);
@@ -219,6 +322,25 @@ impl App {
             }
         }
     }
+}
+
+/// Monotone Zeit in Millisekunden (Zeitquelle für das Modell).
+fn now_ms() -> u64 {
+    unsafe { windows::Win32::System::SystemInformation::GetTickCount64() }
+}
+
+/// Zeitpunkt für das Modell: monotone Zeit und lokale Uhrzeit.
+fn now() -> model::Now {
+    let st = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    let local = model::LocalTime {
+        year: st.wYear,
+        month: st.wMonth as u8,
+        day: st.wDay as u8,
+        hour: st.wHour as u8,
+        minute: st.wMinute as u8,
+        second: st.wSecond as u8,
+    };
+    model::Now { ms: now_ms(), local }
 }
 
 fn client_size(hwnd: HWND) -> (u32, u32) {
@@ -240,6 +362,9 @@ unsafe fn app<'a>(hwnd: HWND) -> Option<&'a mut App> {
 
 fn in_status(app: &App, x: i32, y: i32) -> bool {
     let (bx, by) = app.renderer.to_base(x, y);
+    if app.button_at(bx, by).is_some() {
+        return true;
+    }
     (render::STATUS_X0..=render::STATUS_X1).contains(&bx) && (render::STATUS_Y0..=render::STATUS_Y1).contains(&by)
         || render::link_hit(bx, by, &app.settings.config, &app.monitor)
 }
@@ -254,8 +379,12 @@ fn apply_lang(pref: LangPref) {
     i18n::set_lang(pref.resolve(system_lang()));
 }
 
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
 unsafe fn append(menu: HMENU, flags: MENU_ITEM_FLAGS, id: usize, text: &str) {
-    let t: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let t = wide(text);
     let _ = AppendMenuW(menu, flags, id, PCWSTR(t.as_ptr()));
 }
 
@@ -272,6 +401,11 @@ unsafe fn show_menu(hwnd: HWND, app: &mut App, mut pt: POINT) {
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
     let top = if app.settings.topmost { MF_CHECKED } else { MF_UNCHECKED };
     append(menu, MF_STRING | top, CMD_TOPMOST, tx.menu_topmost);
+    let tray_on = if app.settings.tray { MF_CHECKED } else { MF_UNCHECKED };
+    append(menu, MF_STRING | tray_on, CMD_TRAY, tx.menu_tray);
+    // Zustand aus der Registry, nicht aus der INI
+    let auto_on = if autostart::is_enabled() { MF_CHECKED } else { MF_UNCHECKED };
+    append(menu, MF_STRING | auto_on, CMD_AUTOSTART, tx.menu_autostart);
     // Untermenü Sprache; wird mit dem Hauptmenü zerstört.
     if let Ok(sub) = CreatePopupMenu() {
         for (i, name) in [tx.menu_lang_auto, i18n::NAME_DE, i18n::NAME_EN].iter().enumerate() {
@@ -282,11 +416,21 @@ unsafe fn show_menu(hwnd: HWND, app: &mut App, mut pt: POINT) {
         let _ = CheckMenuRadioItem(sub, CMD_LANG0 as u32, last as u32, (CMD_LANG0 + cur) as u32, MF_BYCOMMAND.0);
         append(menu, MF_POPUP, sub.0 as usize, tx.menu_language);
     }
+    // Untermenü Ereignis-Log
+    if let Ok(sub) = CreatePopupMenu() {
+        let rec = if app.settings.event_log { MF_CHECKED } else { MF_UNCHECKED };
+        append(sub, MF_STRING | rec, CMD_LOG_RECORD, tx.menu_log_record);
+        append(sub, MF_STRING, CMD_LOG_OPEN, tx.menu_log_open);
+        append(menu, MF_POPUP, sub.0 as usize, tx.menu_event_log);
+    }
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
     append(menu, MF_STRING, CMD_EXIT, tx.menu_exit);
     let _ = SetForegroundWindow(hwnd);
     let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, None);
     let _ = DestroyMenu(menu);
+    // Sonst schließt sich ein Menü aus dem Infobereich beim nächsten Mal
+    // nicht zuverlässig (bekanntes Verhalten von TrackPopupMenu).
+    let _ = PostMessageW(hwnd, WM_NULL, WPARAM(0), LPARAM(0));
     match cmd.0 as usize {
         CMD_RESET_PEAKS => {
             app.monitor.clear_peaks();
@@ -315,6 +459,36 @@ unsafe fn show_menu(hwnd: HWND, app: &mut App, mut pt: POINT) {
         CMD_EXIT => {
             let _ = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
         }
+        CMD_TRAY => {
+            app.settings.tray = !app.settings.tray;
+            app.settings.save();
+            if !app.settings.tray {
+                // Ohne Symbol darf das Fenster nicht unsichtbar bleiben.
+                app.restore(hwnd);
+            }
+            app.sync_tray();
+        }
+        CMD_AUTOSTART => {
+            let _ = autostart::set(!autostart::is_enabled());
+        }
+        CMD_LOG_RECORD => {
+            app.settings.event_log = !app.settings.event_log;
+            app.settings.save();
+        }
+        CMD_LOG_OPEN => {
+            // Ordner im Explorer; gibt es die Datei schon, ist sie markiert.
+            if let Some(dir) = events::dir() {
+                let _ = std::fs::create_dir_all(&dir);
+                let file = dir.join(events::FILE_NAME);
+                let (exe, args) = if file.exists() {
+                    ("explorer.exe".to_string(), format!("/select,\"{}\"", file.display()))
+                } else {
+                    (dir.display().to_string(), String::new())
+                };
+                let (exe, args) = (wide(&exe), wide(&args));
+                let _ = windows::Win32::UI::Shell::ShellExecuteW(hwnd, w!("open"), PCWSTR(exe.as_ptr()), PCWSTR(args.as_ptr()), None, SW_SHOWNORMAL);
+            }
+        }
         c if (CMD_LANG0..CMD_LANG0 + LANG_PREFS.len()).contains(&c) => {
             // Wirkt sofort: Fenster, Menü, Tooltips und Dialog lesen die
             // Texte bei jeder Verwendung neu.
@@ -330,7 +504,21 @@ unsafe fn show_menu(hwnd: HWND, app: &mut App, mut pt: POINT) {
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
         let Some(app) = app(hwnd) else { return DefWindowProcW(hwnd, msg, wp, lp) };
+        if msg != 0 && msg == app.taskbar_msg {
+            // Explorer neu gestartet: Symbol neu eintragen
+            app.tray.recreate();
+            app.sync_tray();
+            return LRESULT(0);
+        }
         match msg {
+            tray::WM_TRAY => {
+                match (lp.0 & 0xFFFF) as u32 {
+                    WM_LBUTTONUP => app.restore(hwnd),
+                    WM_RBUTTONUP => show_menu(hwnd, app, POINT { x: -1, y: -1 }),
+                    _ => {}
+                }
+                LRESULT(0)
+            }
             WM_TIMER if wp.0 == TIMER_ID => {
                 app.tick(hwnd);
                 LRESULT(0)
@@ -340,6 +528,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 LRESULT(0)
             }
             WM_NCMOUSEMOVE | WM_MOUSEMOVE => {
+                app.update_chrome(hwnd);
                 app.tip_move(hwnd, msg == WM_NCMOUSEMOVE);
                 DefWindowProcW(hwnd, msg, wp, lp)
             }
@@ -349,6 +538,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 if app.cursor(hwnd).is_none() {
                     app.tip_leave(hwnd);
                 }
+                app.update_chrome(hwnd);
                 DefWindowProcW(hwnd, msg, wp, lp)
             }
             WM_NCLBUTTONDOWN | WM_NCRBUTTONDOWN | WM_LBUTTONDOWN | WM_RBUTTONDOWN => {
@@ -359,12 +549,16 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 let mut ps = PAINTSTRUCT::default();
                 let dc = BeginPaint(hwnd, &mut ps);
                 let (w, h) = client_size(hwnd);
-                let view = View { reading: &app.reading, monitor: &app.monitor, config: &app.settings.config, source_name: app.source.name() };
+                let view = View { reading: &app.reading, monitor: &app.monitor, config: &app.settings.config, source_name: app.source.name(), now_ms: now_ms(), mean_legend: app.renderer.mean_legend };
                 app.renderer.render(dc, w, h, &view);
                 let _ = EndPaint(hwnd, &ps);
                 LRESULT(0)
             }
             WM_ERASEBKGND => LRESULT(1),
+            // Ohne Titelleiste zeichnet Windows beim Aktivieren sonst den
+            // klassischen Größenrahmen über die Fensterfläche (die ganze
+            // Fläche ist Client). lParam −1 unterdrückt dieses Zeichnen.
+            WM_NCACTIVATE => DefWindowProcW(hwnd, msg, wp, LPARAM(-1)),
             WM_NCCALCSIZE if wp.0 != 0 => LRESULT(0), // ganze Fensterfläche ist Client
             WM_NCHITTEST => {
                 let mut pt = lparam_point(lp);
@@ -388,9 +582,24 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             }
             WM_LBUTTONUP => {
                 let pt = lparam_point(lp);
-                if in_status(app, pt.x, pt.y) {
-                    app.monitor.clear_faults();
-                    app.invalidate(hwnd);
+                let (bx, by) = app.renderer.to_base(pt.x, pt.y);
+                match app.button_at(bx, by) {
+                    Some(render::WinButton::Minimize) => {
+                        // Knöpfe ausblenden: beim Minimieren kommt kein
+                        // Verlassen-Ereignis mehr. Mit Tray-Option blendet
+                        // WM_SIZE das Fenster zusätzlich aus.
+                        app.renderer.chrome = render::Chrome::default();
+                        app.tip_leave(hwnd);
+                        let _ = ShowWindow(hwnd, SW_MINIMIZE);
+                    }
+                    Some(render::WinButton::Close) => {
+                        let _ = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
+                    }
+                    None if in_status(app, pt.x, pt.y) => {
+                        app.monitor.clear_faults();
+                        app.invalidate(hwnd);
+                    }
+                    None => {}
                 }
                 LRESULT(0)
             }
@@ -413,6 +622,15 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                     // Backbuffer freigeben, solange nichts zu sehen ist.
                     app.renderer.discard();
                     app.tip_leave(hwnd);
+                    // Mit Tray-Symbol: aus der Taskleiste ausblenden. Nur wenn
+                    // das Symbol wirklich eingetragen ist, sonst wäre das
+                    // Fenster nicht mehr erreichbar.
+                    if app.settings.tray {
+                        app.sync_tray();
+                        if app.tray.is_added() {
+                            let _ = ShowWindow(hwnd, SW_HIDE);
+                        }
+                    }
                 } else {
                     let _ = InvalidateRect(hwnd, None, false);
                 }
@@ -464,6 +682,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             }
             WM_DESTROY => {
                 let _ = KillTimer(hwnd, TIMER_ID);
+                app.tray.remove();
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 drop(Box::from_raw(app as *mut App));
                 PostQuitMessage(0);
@@ -552,12 +771,15 @@ fn main() -> Result<()> {
             settings,
             minimized: false,
             tip: tip::Tip::new(hinst, hwnd),
+            tray: tray::Tray::new(hwnd),
+            taskbar_msg: RegisterWindowMessageW(w!("TaskbarCreated")),
             tip_region: None,
             tip_base: (0.0, 0.0),
         });
         app.renderer.set_dpi(GetDpiForWindow(hwnd));
         app.update_monitor();
         app.tick(hwnd);
+        app.sync_tray();
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(app) as isize);
 
         // Abgerundete Ecken, dunkler Rahmen (Windows 11).

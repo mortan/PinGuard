@@ -198,8 +198,14 @@ pub enum Metric {
     Fan = 9,
     /// Zeile mit den drei Spannungsschienen
     Rails = 10,
+    /// Verlaufskurve der Steckerleistung statt der Gruppe „Netzteil“
+    History = 11,
+    /// Gestrichelte Mittelwert-Linie über den Pin-Balken
+    MeanLine = 12,
+    /// Gelbe Warnlinie in der Balkenfläche (die Gelbfärbung bleibt)
+    WarnLine = 13,
 }
-pub const METRIC_COUNT: usize = 11;
+pub const METRIC_COUNT: usize = 14;
 pub const METRICS: [Metric; METRIC_COUNT] = [
     Metric::ConnW,
     Metric::SumA,
@@ -212,6 +218,9 @@ pub const METRICS: [Metric; METRIC_COUNT] = [
     Metric::Temp,
     Metric::Fan,
     Metric::Rails,
+    Metric::History,
+    Metric::MeanLine,
+    Metric::WarnLine,
 ];
 /// Kennzahlen der Gruppe „Stecker“ bzw. „Netzteil“, in Anzeigereihenfolge.
 pub const CONNECTOR_METRICS: [Metric; 6] = [Metric::ConnW, Metric::SumA, Metric::MaxPin, Metric::Imbalance, Metric::Load, Metric::GpuW];
@@ -220,16 +229,17 @@ pub const PSU_METRICS: [Metric; 4] = [Metric::PsuW, Metric::Eff, Metric::Temp, M
 impl Metric {
     /// Schlüssel in der INI-Datei (`show_<key>`).
     pub fn key(self) -> &'static str {
-        ["conn_w", "sum_a", "max_pin", "imbalance", "load", "gpu_w", "psu_w", "eff", "temp", "fan", "rails"][self as usize]
+        ["conn_w", "sum_a", "max_pin", "imbalance", "load", "gpu_w", "psu_w", "eff", "temp", "fan", "rails", "history", "mean_line", "warn_line"][self as usize]
     }
     /// Beschriftung im Einstellungsdialog (aktuelle Sprache).
     pub fn title(self) -> &'static str {
         crate::i18n::t().metric_titles[self as usize]
     }
-    /// Standard: alles außer Auslastung (hängt vom Power-Limit ab) und
-    /// GPU-Leistung (die Steckerleistung ist das Entscheidende).
+    /// Standard: alles außer Auslastung (hängt vom Power-Limit ab),
+    /// GPU-Leistung (die Steckerleistung ist das Entscheidende) und der
+    /// Verlaufskurve (verdrängt die Netzteil-Werte) und der Mittelwert-Linie.
     pub fn default_shown(self) -> bool {
-        !matches!(self, Metric::Load | Metric::GpuW)
+        !matches!(self, Metric::Load | Metric::GpuW | Metric::History | Metric::MeanLine)
     }
 }
 
@@ -409,6 +419,126 @@ pub fn visible_connectors(c: &[ConnectorStats; CONNECTORS]) -> ([usize; 2], usiz
     }
 }
 
+/// Kennwerte über die angezeigten Stecker (wie im Kennzahlen-Panel).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Summary {
+    /// Steckerleistung in W (Σ der angezeigten Stecker)
+    pub watts: f32,
+    /// Höchster Pin-Strom, sein Stecker und Pin (0-basiert)
+    pub max_a: f32,
+    pub max_conn: usize,
+    pub max_pin: usize,
+    /// Zwei Stecker angezeigt
+    pub both: bool,
+}
+
+/// Kennwerte der angezeigten Stecker; `None`, wenn keiner Pinwerte liefert.
+pub fn summary(s: &PsuSnapshot) -> Option<Summary> {
+    let stats = [ConnectorStats::from_snapshot(s, 0), ConnectorStats::from_snapshot(s, 1)];
+    let (vis, n) = visible_connectors(&stats);
+    let vis = &vis[..n];
+    if !vis.iter().any(|&c| stats[c].present) {
+        return None;
+    }
+    let mut out = Summary { watts: 0.0, max_a: 0.0, max_conn: 0, max_pin: 0, both: n == 2 };
+    for &c in vis {
+        out.watts += stats[c].watts;
+        if stats[c].max_a >= out.max_a {
+            out.max_a = stats[c].max_a;
+            out.max_conn = c;
+            out.max_pin = stats[c].max_pin;
+        }
+    }
+    Some(out)
+}
+
+/// Länge der Verlaufskurve: ein Wert je Sekunde, zwei Minuten.
+pub const HISTORY_LEN: usize = 120;
+/// Lücke bis zu dieser Länge (s) wird mit dem neuen Wert aufgefüllt (Timer
+/// verspätet), längere Lücken bleiben leer.
+const HISTORY_FILL_S: u64 = 3;
+
+/// Ringpuffer fester Größe mit der Steckerleistung je Sekunde. Fehlende
+/// Daten sind `NaN` und werden als Lücke gezeichnet, nicht als 0.
+#[derive(Clone, Debug)]
+pub struct PowerHistory {
+    vals: [f32; HISTORY_LEN],
+    /// nächster Schreibplatz (= ältester Wert)
+    head: usize,
+    /// Sekunde des neuesten Werts
+    last_s: Option<u64>,
+}
+
+impl Default for PowerHistory {
+    fn default() -> Self {
+        PowerHistory { vals: [f32::NAN; HISTORY_LEN], head: 0, last_s: None }
+    }
+}
+
+impl PowerHistory {
+    fn push(&mut self, v: f32) {
+        self.vals[self.head] = v;
+        self.head = (self.head + 1) % HISTORY_LEN;
+    }
+
+    /// Nimmt den Wert für die Sekunde `sec` (monotone Zeit) auf. Mehrere
+    /// Werte in derselben Sekunde: der höchste zählt (Spitzen gehen nicht
+    /// verloren). Liefert, ob sich die Kurve geändert hat.
+    pub fn record(&mut self, sec: u64, w: Option<f32>) -> bool {
+        let v = w.filter(|v| v.is_finite()).unwrap_or(f32::NAN);
+        match self.last_s {
+            // gleiche Sekunde (oder Uhr zurückgesprungen): neuesten Platz anpassen
+            Some(l) if sec <= l => {
+                let i = (self.head + HISTORY_LEN - 1) % HISTORY_LEN;
+                let old = self.vals[i];
+                let new = if old.is_nan() { v } else if v.is_nan() { old } else { old.max(v) };
+                self.vals[i] = new;
+                return new.to_bits() != old.to_bits();
+            }
+            Some(l) => {
+                let gap = sec - l;
+                let fill = if gap <= HISTORY_FILL_S { v } else { f32::NAN };
+                for _ in 1..gap.min(HISTORY_LEN as u64) {
+                    self.push(fill);
+                }
+                self.push(v);
+            }
+            None => self.push(v),
+        }
+        self.last_s = Some(sec);
+        true
+    }
+
+    /// Werte vom ältesten zum neuesten (`None` = Lücke).
+    pub fn iter(&self) -> impl Iterator<Item = Option<f32>> + '_ {
+        (0..HISTORY_LEN).map(move |k| Some(self.vals[(self.head + k) % HISTORY_LEN]).filter(|v| !v.is_nan()))
+    }
+
+    /// Neuester Wert.
+    pub fn latest(&self) -> Option<f32> {
+        self.last_s?;
+        Some(self.vals[(self.head + HISTORY_LEN - 1) % HISTORY_LEN]).filter(|v| !v.is_nan())
+    }
+
+    /// Höchster Wert im Fenster: (Position 0 = ältester, Wert); bei
+    /// gleichen Werten der neueste.
+    pub fn peak(&self) -> Option<(usize, f32)> {
+        self.iter().enumerate().filter_map(|(i, v)| v.map(|v| (i, v))).fold(None, |best, (i, v)| match best {
+            Some((_, b)) if b > v => best,
+            _ => Some((i, v)),
+        })
+    }
+}
+
+/// Oberer Skalenwert der Verlaufskurve: nächste volle 100 W über dem
+/// Maximum (mit etwas Luft für die Peak-Markierung), mindestens 100 W.
+pub fn history_scale(max_w: f32) -> f32 {
+    if !max_w.is_finite() || max_w <= 0.0 {
+        return 100.0;
+    }
+    ((max_w * 1.03 / 100.0).ceil() * 100.0).max(100.0)
+}
+
 /// Fehlerarten der Statuszeile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fault {
@@ -432,6 +562,68 @@ impl Fault {
     }
 }
 
+/// Lokale Uhrzeit. Kommt von außen (`main.rs` per `GetLocalTime`), damit das
+/// Modell ohne Windows testbar bleibt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct LocalTime {
+    pub year: u16,
+    pub month: u8,
+    pub day: u8,
+    pub hour: u8,
+    pub minute: u8,
+    pub second: u8,
+}
+
+impl LocalTime {
+    /// ISO 8601 ohne Zeitzone, z. B. `2026-11-12T14:32:05`.
+    pub fn iso(&self) -> String {
+        format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}", self.year, self.month, self.day, self.hour, self.minute, self.second)
+    }
+    /// Uhrzeit `14:32`.
+    pub fn hhmm(&self) -> String {
+        format!("{:02}:{:02}", self.hour, self.minute)
+    }
+}
+
+/// Zeitpunkt einer Auswertung: monotone Zeit für Dauern, Uhrzeit für die
+/// Anzeige.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct Now {
+    pub ms: u64,
+    pub local: LocalTime,
+}
+
+/// Schlimmster Wert während eines Alarms.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum Worst {
+    /// Nur Zeit und Dauer (Netzteil-Alarme, Verbindung)
+    #[default]
+    None,
+    /// Höchster Pin-Strom (Stecker und Pin 0-basiert)
+    Pin { conn: usize, pin: usize, amps: f32 },
+    /// Höchste Schieflast in der Messart, die beim Auftreten galt
+    Imbalance { value: f32, mode: ImbalanceMode },
+}
+
+/// Gedächtnis eines Alarms: letzte Auslösung, Dauer, schlimmster Wert.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct AlarmMemo {
+    /// Uhrzeit der letzten Auslösung
+    pub at: LocalTime,
+    pub start_ms: u64,
+    /// Zuletzt aktiv gesehen bzw. Ende (monotone Zeit)
+    pub end_ms: u64,
+    pub worst: Worst,
+}
+
+impl AlarmMemo {
+    /// Dauer in Sekunden; bei aktivem Alarm bis `now_ms`.
+    pub fn duration_s(&self, active: bool, now_ms: u64) -> u64 {
+        let end = if active { self.end_ms.max(now_ms) } else { self.end_ms };
+        end.saturating_sub(self.start_ms) / 1000
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct FaultState {
     pub active: bool,
@@ -439,27 +631,65 @@ pub struct FaultState {
     pub latched: bool,
 }
 
+/// Gesamtzustand für das Tray-Symbol.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Status {
+    /// grau: keine Daten
+    NoData,
+    /// grün
+    Ok,
+    /// gelb: Warnstufe erreicht oder Alarm gehalten
+    Warn,
+    /// rot: Alarm aktiv
+    Alarm,
+}
+
 /// Peaks und gelatchte Fehler über die Laufzeit.
 #[derive(Clone, Debug, Default)]
 pub struct Monitor {
     pub peaks: [[f32; PINS]; CONNECTORS],
+    /// Höchste Steckerleistung (W) seit Start/Reset, über die angezeigten Stecker
+    pub power_peak: f32,
     pub faults: [FaultState; FAULT_COUNT],
     /// Stecker hat seit dem Start mindestens einmal Strom geführt.
     pub used: [bool; CONNECTORS],
     /// Einmal gültige Daten gesehen (ohne das wird "keine Daten" beim Start
     /// nicht gelatcht).
     seen_data: bool,
+    /// Steckerleistung der letzten zwei Minuten
+    pub history: PowerHistory,
+    /// Gedächtnis je Alarm (seit dem letzten Zurücksetzen)
+    pub memo: [Option<AlarmMemo>; FAULT_COUNT],
 }
 
 impl Monitor {
+    /// Steckerleistung für die Verlaufskurve aufnehmen; `sec` ist eine
+    /// monotone Zeit in Sekunden. Liefert, ob sich die Kurve geändert hat.
+    pub fn record_power(&mut self, sec: u64, snap: Option<&PsuSnapshot>) -> bool {
+        let w = snap.filter(|s| s.has_psu()).and_then(summary).map(|s| s.watts);
+        self.history.record(sec, w)
+    }
+
+    /// Wie `update_at`, ohne Zeitbezug (nur für Tests).
+    #[cfg(test)]
+    pub fn update(&mut self, snap: Option<&PsuSnapshot>, cfg: &Config) -> [bool; FAULT_COUNT] {
+        self.update_at(snap, cfg, Now::default())
+    }
+
     /// Übernimmt einen neuen Zustand. `snap = None` heißt: keine PSU-Daten.
     /// Liefert die Alarme, die gerade neu aufgetreten sind (steigende Flanke).
-    pub fn update(&mut self, snap: Option<&PsuSnapshot>, cfg: &Config) -> [bool; FAULT_COUNT] {
+    pub fn update_at(&mut self, snap: Option<&PsuSnapshot>, cfg: &Config, now: Now) -> [bool; FAULT_COUNT] {
         let lim = &cfg.limits;
         let mut active = [false; FAULT_COUNT];
+        // Schlimmste Werte dieses Standes (für das Alarm-Gedächtnis)
+        let mut worst_pin: Option<(usize, usize, f32)> = None;
+        let mut worst_imb: Option<f32> = None;
         match snap {
             Some(s) if s.has_psu() => {
                 self.seen_data = true;
+                if let Some(sm) = summary(s) {
+                    self.power_peak = self.power_peak.max(sm.watts);
+                }
                 for c in 0..CONNECTORS {
                     let st = ConnectorStats::from_snapshot(s, c);
                     self.used[c] |= st.active();
@@ -469,8 +699,15 @@ impl Monitor {
                     if st.present && st.max_a >= lim.pin_limit_a {
                         active[Fault::OverCurrent as usize] = true;
                     }
+                    if st.present && worst_pin.is_none_or(|w| st.max_a > w.2) {
+                        worst_pin = Some((c, st.max_pin, st.max_a));
+                    }
                     if lim.imbalance_level(&st) == 2 {
                         active[Fault::Imbalance as usize] = true;
+                    }
+                    if lim.imbalance_armed(&st) {
+                        let v = lim.imbalance_value(&st);
+                        worst_imb = Some(worst_imb.map_or(v, |w| w.max(v)));
                     }
                 }
                 active[Fault::Alarm1 as usize] = s.alarm(0).unwrap_or(false);
@@ -479,9 +716,11 @@ impl Monitor {
             _ => active[Fault::NoData as usize] = true,
         }
         let mut raised = [false; FAULT_COUNT];
+        let mut was = [false; FAULT_COUNT];
         for (i, (f, a)) in self.faults.iter_mut().zip(active).enumerate() {
             let ac = cfg.alarms[i];
             let a = a && ac.enabled;
+            was[i] = f.active;
             raised[i] = a && !f.active;
             f.active = a;
             f.latched = if ac.enabled && ac.latch { f.latched || a } else { a };
@@ -492,17 +731,88 @@ impl Monitor {
             self.faults[Fault::NoData as usize].latched = false;
             raised[Fault::NoData as usize] = false;
         }
+
+        // Alarm-Gedächtnis: bei steigender Flanke neu anlegen, solange aktiv
+        // Ende und schlimmsten Wert fortschreiben, beim Abfallen das Ende
+        // festhalten. Ohne Anzeige (weder aktiv noch gehalten) vergessen.
+        for (i, f) in FAULTS.iter().enumerate() {
+            let st = self.faults[i];
+            if raised[i] {
+                self.memo[i] = Some(AlarmMemo { at: now.local, start_ms: now.ms, end_ms: now.ms, worst: Worst::None });
+            }
+            let Some(m) = self.memo[i].as_mut() else { continue };
+            if st.active {
+                m.end_ms = now.ms;
+                match f {
+                    Fault::OverCurrent => {
+                        if let Some((conn, pin, amps)) = worst_pin {
+                            if !matches!(m.worst, Worst::Pin { amps: a, .. } if a >= amps) {
+                                m.worst = Worst::Pin { conn, pin, amps };
+                            }
+                        }
+                    }
+                    Fault::Imbalance => {
+                        if let Some(v) = worst_imb {
+                            let mode = lim.imbalance_mode;
+                            match &mut m.worst {
+                                Worst::Imbalance { value, mode: m0 } if *m0 == mode => *value = value.max(v),
+                                w => *w = Worst::Imbalance { value: v, mode },
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            } else if was[i] {
+                m.end_ms = now.ms;
+            }
+            if !st.active && !st.latched {
+                self.memo[i] = None;
+            }
+        }
         raised
     }
 
+    /// Gehaltene Fehler zurücksetzen; das Gedächtnis inaktiver Alarme wird
+    /// gelöscht, aktive behalten ihren Beginn.
     pub fn clear_faults(&mut self) {
-        for f in &mut self.faults {
+        for (f, m) in self.faults.iter_mut().zip(&mut self.memo) {
             f.latched = f.active;
+            if !f.active {
+                *m = None;
+            }
         }
     }
 
+    /// Gesamtzustand (Farbe des Tray-Symbols). Vorrang: aktiver Alarm, dann
+    /// keine Daten, dann gehaltener Alarm oder Warnstufe, sonst in Ordnung.
+    pub fn status(&self, snap: Option<&PsuSnapshot>, cfg: &Config) -> Status {
+        if self.faults.iter().zip(FAULTS).any(|(f, k)| f.active && k != Fault::NoData) {
+            return Status::Alarm;
+        }
+        let Some(s) = snap.filter(|s| s.has_psu()) else { return Status::NoData };
+        if self.faults.iter().any(|f| f.latched) {
+            return Status::Warn;
+        }
+        let lim = &cfg.limits;
+        let warn = (0..CONNECTORS).map(|c| ConnectorStats::from_snapshot(s, c)).any(|st| {
+            st.present && (st.pins.iter().any(|a| lim.pin_level(*a) >= 1) || lim.imbalance_level(&st) >= 1)
+        });
+        if warn {
+            Status::Warn
+        } else {
+            Status::Ok
+        }
+    }
+
+    /// Gedächtnis eines Alarms, solange er aktiv oder gehalten ist.
+    pub fn memo(&self, f: Fault) -> Option<AlarmMemo> {
+        self.memo[f as usize]
+    }
+
+    /// Pin-Peaks und Peak der Steckerleistung zurücksetzen.
     pub fn clear_peaks(&mut self) {
         self.peaks = Default::default();
+        self.power_peak = 0.0;
     }
 
     /// Statusfeld anzeigen? ALARM S2 nur, wenn Stecker 2 schon einmal belegt
@@ -682,6 +992,178 @@ mod tests {
         cfg.limits.imbalance_min_load_a = 5.0;
         m3.update(Some(&low), &cfg);
         assert!(m3.fault(Fault::Imbalance).active);
+    }
+
+    #[test]
+    fn history_ring_and_gaps() {
+        let mut h = PowerHistory::default();
+        assert_eq!(h.latest(), None);
+        assert_eq!(h.peak(), None);
+        assert!(h.iter().all(|v| v.is_none()));
+        assert!(h.record(10, Some(300.0)));
+        // gleiche Sekunde: der höhere Wert zählt, ein niedrigerer ändert nichts
+        assert!(h.record(10, Some(350.0)));
+        assert!(!h.record(10, Some(200.0)));
+        assert!(!h.record(10, None));
+        assert_eq!(h.latest(), Some(350.0));
+        // kurze Lücke (Timer verspätet) wird aufgefüllt
+        h.record(12, Some(400.0));
+        let v: Vec<_> = h.iter().collect();
+        assert_eq!(&v[HISTORY_LEN - 3..], &[Some(350.0), Some(400.0), Some(400.0)]);
+        // keine Daten: Lücke, nicht 0
+        h.record(13, None);
+        assert_eq!(h.latest(), None);
+        assert_eq!(h.iter().last(), Some(None));
+        // lange Pause: dazwischen leer
+        h.record(30, Some(100.0));
+        let v: Vec<_> = h.iter().collect();
+        assert_eq!(v[HISTORY_LEN - 1], Some(100.0));
+        assert!(v[HISTORY_LEN - 17..HISTORY_LEN - 1].iter().all(|x| x.is_none()));
+        assert_eq!(h.peak(), Some((HISTORY_LEN - 19, 400.0)));
+        // nach zwei Minuten ist der alte Peak herausgefallen
+        for s in 31..31 + HISTORY_LEN as u64 {
+            h.record(s, Some(50.0));
+        }
+        assert_eq!(h.peak().map(|p| p.1), Some(50.0));
+        assert_eq!(h.iter().count(), HISTORY_LEN);
+        // riesiger Sprung: kein Überlauf, alles leer bis auf den neuen Wert
+        h.record(1_000_000, Some(10.0));
+        assert_eq!(h.iter().filter(|v| v.is_some()).count(), 1);
+    }
+
+    #[test]
+    fn history_scale_rounds_up() {
+        assert_eq!(history_scale(0.0), 100.0);
+        assert_eq!(history_scale(f32::NAN), 100.0);
+        assert_eq!(history_scale(40.0), 100.0);
+        assert_eq!(history_scale(96.0), 100.0);
+        assert_eq!(history_scale(98.0), 200.0);
+        assert_eq!(history_scale(512.0), 600.0);
+        assert_eq!(history_scale(590.0), 700.0);
+        assert_eq!(history_scale(1150.0), 1200.0);
+    }
+
+    #[test]
+    fn summary_and_record_power() {
+        let s = snap([7.5, 7.0, 8.0, 7.5, 7.5, 7.5], [0.0; 6]);
+        let sm = summary(&s).unwrap();
+        assert!((sm.watts - 540.0).abs() < 1e-3);
+        assert_eq!((sm.max_conn, sm.max_pin, sm.both), (0, 2, false));
+        let both = summary(&snap([5.0; 6], [6.0, 6.0, 9.0, 6.0, 6.0, 6.0])).unwrap();
+        assert!(both.both && both.max_conn == 1 && both.max_pin == 2);
+        assert!((both.watts - (30.0 + 39.0) * 12.0).abs() < 1e-3);
+        assert_eq!(summary(&PsuSnapshot::default()), None);
+        // Peak der Steckerleistung: bleibt bis zum Zurücksetzen der Peaks
+        let mut pm = Monitor::default();
+        pm.update(Some(&s), &Config::default());
+        pm.update(Some(&snap([5.0; 6], [0.0; 6])), &Config::default());
+        assert!((pm.power_peak - 540.0).abs() < 1e-3);
+        pm.update(None, &Config::default());
+        pm.clear_faults();
+        assert!((pm.power_peak - 540.0).abs() < 1e-3);
+        pm.clear_peaks();
+        assert_eq!(pm.power_peak, 0.0);
+        pm.update(Some(&snap([5.0; 6], [0.0; 6])), &Config::default());
+        assert!((pm.power_peak - 360.0).abs() < 1e-3);
+        let mut m = Monitor::default();
+        assert!(m.record_power(1, Some(&s)));
+        assert!(m.record_power(2, None));
+        assert_eq!(m.history.iter().filter(|v| v.is_some()).count(), 1);
+    }
+
+    fn at(ms: u64, hour: u8, minute: u8) -> Now {
+        Now { ms, local: LocalTime { year: 2026, month: 11, day: 12, hour, minute, second: 0 } }
+    }
+
+    #[test]
+    fn alarm_memo() {
+        let cfg = Config::default();
+        let mut m = Monitor::default();
+        let ok = snap([7.0; 6], [0.0; 6]);
+        m.update_at(Some(&ok), &cfg, at(0, 14, 30));
+        assert!(m.memo.iter().all(|x| x.is_none()));
+        // Überstrom ab 14:32, schlimmster Wert 9,8 A auf Pin 3
+        m.update_at(Some(&snap([7.0, 7.0, 9.4, 7.0, 7.0, 7.0], [0.0; 6])), &cfg, at(10_000, 14, 32));
+        m.update_at(Some(&snap([7.0, 7.0, 9.8, 7.0, 7.0, 7.0], [0.0; 6])), &cfg, at(11_000, 14, 32));
+        m.update_at(Some(&snap([7.0, 7.0, 9.5, 7.0, 7.0, 7.0], [0.0; 6])), &cfg, at(12_000, 14, 32));
+        let mo = m.memo(Fault::OverCurrent).unwrap();
+        assert_eq!(mo.at.hhmm(), "14:32");
+        assert_eq!(mo.worst, Worst::Pin { conn: 0, pin: 2, amps: 9.8 });
+        assert_eq!(mo.duration_s(true, 13_500), 3); // läuft bei aktivem Alarm weiter
+        // Ende: Dauer bleibt stehen, Gedächtnis bleibt (gehalten)
+        m.update_at(Some(&ok), &cfg, at(14_000, 14, 32));
+        let mo = m.memo(Fault::OverCurrent).unwrap();
+        assert_eq!(mo.duration_s(false, 99_000), 4);
+        m.update_at(Some(&ok), &cfg, at(20_000, 14, 33));
+        assert_eq!(m.memo(Fault::OverCurrent).unwrap().end_ms, 14_000);
+        // erneutes Auslösen ersetzt den alten Eintrag
+        m.update_at(Some(&snap([9.3, 7.0, 7.0, 7.0, 7.0, 7.0], [0.0; 6])), &cfg, at(30_000, 14, 40));
+        let mo = m.memo(Fault::OverCurrent).unwrap();
+        assert_eq!((mo.at.hhmm(), mo.worst), ("14:40".to_string(), Worst::Pin { conn: 0, pin: 0, amps: 9.3 }));
+        // Zurücksetzen: aktive behalten ihr Gedächtnis, inaktive verlieren es
+        m.clear_faults();
+        assert!(m.memo(Fault::OverCurrent).is_some());
+        m.update_at(Some(&ok), &cfg, at(31_000, 14, 40));
+        m.clear_faults();
+        assert!(m.memo(Fault::OverCurrent).is_none());
+
+        // Schieflast: höchster Wert in der gewählten Messart
+        m.update_at(Some(&snap([8.0, 4.5, 6.0, 6.0, 6.0, 6.0], [0.0; 6])), &cfg, at(40_000, 15, 0));
+        m.update_at(Some(&snap([8.5, 4.5, 6.0, 6.0, 6.0, 6.0], [0.0; 6])), &cfg, at(41_000, 15, 0));
+        match m.memo(Fault::Imbalance).unwrap().worst {
+            Worst::Imbalance { value, mode } => assert!((value - 4.0).abs() < 1e-4 && mode == ImbalanceMode::Amps),
+            w => panic!("{w:?}"),
+        }
+        // Verbindung: nur Zeit und Dauer
+        m.update_at(None, &cfg, at(50_000, 15, 1));
+        let nd = m.memo(Fault::NoData).unwrap();
+        assert_eq!((nd.worst, nd.start_ms), (Worst::None, 50_000));
+
+        // ohne Halten verschwindet das Gedächtnis mit dem Alarm
+        let mut cfg2 = cfg;
+        cfg2.alarms[Fault::OverCurrent as usize].latch = false;
+        let mut m2 = Monitor::default();
+        m2.update_at(Some(&snap([9.5, 7.0, 7.0, 7.0, 7.0, 7.0], [0.0; 6])), &cfg2, at(0, 1, 0));
+        assert!(m2.memo(Fault::OverCurrent).is_some());
+        m2.update_at(Some(&ok), &cfg2, at(1000, 1, 0));
+        assert!(m2.memo(Fault::OverCurrent).is_none());
+        // Start ohne Daten: kein Gedächtnis für „keine Daten“
+        let mut m3 = Monitor::default();
+        m3.update_at(None, &cfg, at(0, 1, 0));
+        assert!(m3.memo(Fault::NoData).is_none());
+    }
+
+    #[test]
+    fn status_levels() {
+        let cfg = Config::default();
+        let mut m = Monitor::default();
+        m.update(None, &cfg);
+        assert_eq!(m.status(None, &cfg), Status::NoData);
+        let ok = snap([7.0; 6], [0.0; 6]);
+        m.update(Some(&ok), &cfg);
+        assert_eq!(m.status(Some(&ok), &cfg), Status::Ok);
+        // gelber Pin
+        let warn = snap([8.5, 7.0, 7.0, 7.0, 7.0, 7.0], [0.0; 6]);
+        m.update(Some(&warn), &cfg);
+        assert_eq!(m.status(Some(&warn), &cfg), Status::Warn);
+        // Überstrom aktiv, danach gehalten
+        let hot = snap([9.5, 7.0, 7.0, 7.0, 7.0, 7.0], [0.0; 6]);
+        m.update(Some(&hot), &cfg);
+        assert_eq!(m.status(Some(&hot), &cfg), Status::Alarm);
+        m.update(Some(&ok), &cfg);
+        assert_eq!(m.status(Some(&ok), &cfg), Status::Warn);
+        m.clear_faults();
+        assert_eq!(m.status(Some(&ok), &cfg), Status::Ok);
+        // Verbindung weg: grau, auch wenn der Alarm aktiv ist
+        m.update(None, &cfg);
+        assert_eq!(m.status(None, &cfg), Status::NoData);
+    }
+
+    #[test]
+    fn local_time_format() {
+        let t = LocalTime { year: 2026, month: 3, day: 7, hour: 9, minute: 5, second: 2 };
+        assert_eq!(t.iso(), "2026-03-07T09:05:02");
+        assert_eq!(t.hhmm(), "09:05");
     }
 
     #[test]

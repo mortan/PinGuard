@@ -13,19 +13,49 @@ Mock-Modus mit Schieflast, Alarm und gelatchtem Überstrom: [docs/screenshot-moc
 
 | Bereich | Inhalt |
 |---|---|
-| Balken links | 6 Pins des aktiven Steckers. Ampel (Standard, einstellbar): grün < 8 A, gelb 8–9,2 A, rot ≥ 9,2 A. Vollausschlag 12 A, rote Linie an der Rot-Grenze, gelbe Linie an der Gelb-Grenze, Strich = Peak seit Start/Reset. Stecker 2 erscheint nur, wenn er Strom führt. |
-| Kennzahlen rechts | Zwei Gruppen. **Stecker:** Leistung (Σ Pins × gemessene 12 V), Σ Strom, Max-Pin, Schieflast (Δ Pins in A oder Abw. in %, je nach Messart). **Netzteil:** DC-Leistung, Effizienz, Temperatur, Lüfter. Zusätzlich einblendbar: Auslastung (bezogen auf die Nennleistung je Stecker) und GPU-Board-Power (Afterburner `Power`). |
+| Balken links | 6 Pins des aktiven Steckers. Ampel (Standard, einstellbar): grün < 8 A, gelb 8–9,2 A, rot ≥ 9,2 A. Vollausschlag 12 A, rote Linie an der Rot-Grenze, gelbe Linie an der Gelb-Grenze (ausblendbar), Strich = Peak seit Start/Reset. Optional eine gestrichelte blaue **Mittelwert-Linie** je Stecker (Durchschnitt der sechs Pins, nur wenn der Stecker Strom führt), in der Ein-Stecker-Ansicht mit Legende „Ø 7,0 A“ in der Titelzeile, sofern sie neben den Titel passt. Stecker 2 erscheint nur, wenn er Strom führt. |
+| Kennzahlen rechts | Zwei Gruppen. **Stecker:** Leistung (Σ Pins × gemessene 12 V; Tooltip mit Peak seit Start/Reset), Σ Strom, Max-Pin, Schieflast (Δ Pins in A oder Abw. in %, je nach Messart). **Netzteil:** DC-Leistung, Effizienz, Temperatur, Lüfter. Zusätzlich einblendbar: Auslastung (bezogen auf die Nennleistung je Stecker) und GPU-Board-Power (Afterburner `Power`). |
+| Verlaufskurve | Optional statt der Gruppe „Netzteil“: **VERLAUF · 2 MIN**, die Steckerleistung der letzten 2 Minuten (ein Wert je Sekunde). Skala automatisch auf die nächsten vollen 100 W über dem Maximum (mindestens 100 W), höchster Wert als Punkt mit „Peak NNN W“, Lücke = keine Daten. Tooltip mit aktuellem Wert, Peak und dessen Alter. |
 | Rails | 12 V / 5 V / 3,3 V: Spannung und Strom (ausblendbar) |
-| Verbindung | Kleiner Punkt am Ende der Überschrift „NETZTEIL“: grün = Daten kommen, rot mit „keine Daten“ = Verbindung zur Datenquelle weg, orange Ring = war unterbrochen (Klick setzt zurück), blass = Alarm abgeschaltet. |
+| Verbindung | Kleiner Punkt am Ende der Überschrift „NETZTEIL“ (bzw. „VERLAUF“): grün = Daten kommen, rot mit „keine Daten“ = Verbindung zur Datenquelle weg, orange Ring = war unterbrochen (Klick setzt zurück), blass = Alarm abgeschaltet. |
 | Statuszeile | ALARM S1/S2 (Alarm-Flag, das das Netzteil selbst je Stecker meldet), ÜBERSTROM (Pin ≥ Rot-Grenze), SCHIEFLAST (Grenze in A oder %, siehe unten; Standard 3 A). **Rot** = aktiv, **orange umrandet** = war aktiv (gelatcht), blass = abgeschaltet. ALARM S2 erscheint erst, wenn Stecker 2 seit dem Start Strom geführt hat oder sein Alarm auslöst. |
+| Alarm-Gedächtnis | Solange ein Alarm aktiv oder gehalten ist, nennt der Tooltip des Statusfelds bzw. des Verbindungspunkts die letzte Auslösung, z. B. „Ausgelöst 14:32 Uhr, Pin 3: 9,6 A, Dauer 4 s“: bei Überstrom den höchsten Pin-Strom (mit Stecker, sobald Stecker 2 im Spiel ist), bei Schieflast den höchsten Wert in der gewählten Messart, bei Netzteil-Alarmen und Verbindung nur Uhrzeit und Dauer. Bei aktivem Alarm läuft die Dauer mit. Zurücksetzen der Fehler löscht das Gedächtnis (ein noch aktiver Alarm behält seinen Beginn). |
 
 Bedienung:
+- **Minimieren und Beenden:** Zwei Knöpfe erscheinen oben rechts, solange die Maus über dem Fenster steht. Mit *In den Infobereich minimieren* geht Minimieren direkt dorthin.
 - Fenster an beliebiger Stelle ziehen. Größe an den Rändern ändern, das Seitenverhältnis bleibt dabei erhalten.
 - **Klick auf die Statuszeile oder den Verbindungspunkt:** gelatchte Fehler zurücksetzen
-- **Doppelklick:** Peaks zurücksetzen
-- **Rechtsklick:** Menü mit Peaks/Fehler zurücksetzen, *Grenzen und Alarme …*, *Immer im Vordergrund*, *Sprache*, Beenden
-- Position, Größe, *Immer im Vordergrund*, Sprache, Grenzwerte und Alarme werden in `%APPDATA%\GpuMon\gpumon.ini` gespeichert.
-- Es läuft nur eine Instanz. Ein zweiter Start holt das vorhandene Fenster nach vorn.
+- **Doppelklick:** Peaks zurücksetzen (Pin-Peaks und Peak der Steckerleistung)
+- **Rechtsklick:** Menü mit Peaks/Fehler zurücksetzen, *Grenzen und Alarme …*, *Immer im Vordergrund*, *In den Infobereich minimieren*, *Mit Windows starten*, *Sprache*, *Ereignis-Log* (*Alarme aufzeichnen*, *Ordner öffnen*), Beenden
+- Position, Größe, *Immer im Vordergrund*, Infobereich, Ereignis-Log, Sprache, Grenzwerte und Alarme werden in `%APPDATA%\GpuMon\gpumon.ini` gespeichert.
+- Es läuft nur eine Instanz. Ein zweiter Start holt das vorhandene Fenster nach vorn (auch aus dem Infobereich).
+
+### Infobereich (Tray)
+
+*Rechtsklick → In den Infobereich minimieren* (INI `tray` = 0/1, Standard 0). Ist die Option an, zeigt
+ein rundes Symbol im Infobereich den Zustand: **grün** = in Ordnung, **gelb** = Warnstufe erreicht
+(Pin gelb oder Schieflast ab halber Grenze) oder Alarm gehalten, **rot** = Alarm aktiv, **grau** = keine
+Daten. Sein Tooltip nennt Steckerleistung, höchsten Pin und aktive Alarme. Minimieren blendet das
+Fenster aus der Taskleiste aus; **Linksklick** auf das Symbol holt es zurück, **Rechtsklick** öffnet das
+Kontextmenü. Die Alarm-Option *Zeigen* holt das Fenster auch aus dem Infobereich. Die Symbole werden
+zur Laufzeit erzeugt und nur bei einem Zustandswechsel neu gesetzt; nach einem Neustart des Explorers
+wird das Symbol neu eingetragen.
+
+### Mit Windows starten
+
+*Rechtsklick → Mit Windows starten* schreibt bzw. löscht den Wert `GpuMon` unter
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (Pfad der laufenden EXE in Anführungszeichen).
+Das Häkchen wird bei jedem Öffnen des Menüs aus der Registry gelesen und ist nur gesetzt, wenn der
+Eintrag auf genau diese EXE zeigt. Nicht in der INI gespeichert.
+
+### Ereignis-Log
+
+Bei jedem neu auftretenden Alarm hängt GpuMon eine Zeile an `%APPDATA%\GpuMon\events.csv` an (INI
+`event_log` = 0/1, Standard 1; Menü *Ereignis-Log → Alarme aufzeichnen*). Spalten: `time` (ISO, lokale
+Zeit), `alarm` (`alarm1`, `alarm2`, `overcurrent`, `imbalance`, `nodata`), `c1_pin1_a` … `c2_pin6_a`,
+`v12_v`, `connector_w`. Trennzeichen Semikolon, Dezimalpunkt, unabhängig von der Sprache; fehlende
+Werte bleiben leer. Ab 1 MB wird die Datei in `events.old.csv` umbenannt (eine ältere wird ersetzt)
+und neu begonnen. Schreibfehler werden ignoriert. *Ordner öffnen* zeigt die Datei im Explorer.
 
 ### Sprache
 
@@ -63,7 +93,11 @@ Sie wird ab der halben Grenze gelb und ab der Grenze rot.
 
 **Anzeige:** Rechts im Dialog lässt sich jede Kennzahl ein- und ausblenden (INI: `show_<name>` = 0/1 mit
 `conn_w`, `sum_a`, `max_pin`, `imbalance`, `load`, `gpu_w`, `psu_w`, `eff`, `temp`, `fan`, `rails`).
-Standardmäßig aus sind Auslastung und GPU-Leistung.
+Unter „Netzteil“ steht *Verlauf stattdessen* (`show_history`): ersetzt die vier Netzteil-Kennzahlen
+durch die Verlaufskurve, deren Kästchen sind dann gesperrt. Unter „Balken“: *Warnlinie (gelb)*
+(`show_warn_line`; blendet nur die Linie samt Tooltip aus, die Gelbfärbung bleibt) und
+*Mittelwert-Linie* (`show_mean_line`). Standardmäßig aus sind Auslastung, GPU-Leistung, Verlaufskurve
+und Mittelwert-Linie; fehlt ein Schlüssel (ältere INI), gilt der Standard.
 
 Je Alarm (`alarm1`, `alarm2`, `overcurrent`, `imbalance`, `nodata`) gibt es vier Schalter:
 **Aktiv** (`<alarm>_on`: auswerten und anzeigen), **Halten** (`_latch`: bleibt orange markiert bis zum Klick auf die Statuszeile),
@@ -98,7 +132,9 @@ cargo build --release
 ```
 
 Das Ergebnis ist `target\release\gpumon.exe` (~190 KB, statisch gelinkt, ohne Runtime und ohne Konsolenfenster).
-Tests: `cargo test` (Modell, MAHM-Parsing gegen Byte-Puffer, Einstellungen, Tooltips und Textbreiten je Sprache).
+Tests: `cargo test` (Modell inkl. Verlauf und Alarm-Gedächtnis, MAHM-Parsing gegen Byte-Puffer, Einstellungen, CSV-Zeilen,
+Tray-Symbolbild, Autostart-Kommandozeile, Tooltips und Textbreiten je Sprache). Die Tests schreiben weder in
+`%APPDATA%\GpuMon` noch in die Registry oder den Infobereich (CSV-Test nur im Temp-Ordner).
 
 ## Technik und Entscheidungen
 
@@ -124,11 +160,16 @@ Tests: `cargo test` (Modell, MAHM-Parsing gegen Byte-Puffer, Einstellungen, Tool
 
 ```
 src/
-  main.rs          Fenster, Message-Loop, Timer, DPI, Hit-Test, Menü
+  main.rs          Fenster, Message-Loop, Timer, DPI, Hit-Test, Menü, Zeitquelle
   i18n.rs          Texte Deutsch/Englisch, Zahlenformat, Sprachwahl
-  settings.rs      Position/Größe/Topmost, Sprache, Grenzwerte, Alarme (INI)
+  settings.rs      Position/Größe/Topmost, Sprache, Tray, Log, Grenzwerte, Alarme (INI)
   settings_dlg.rs  Einstellungsdialog (Win32-Dialog aus Speichervorlage)
-  model.rs         PsuSnapshot, Kennzahlen, Peaks, Fehler, Grenzwert-/Alarm-Konfiguration
+  model.rs         PsuSnapshot, Kennzahlen, Peaks, Fehler, Alarm-Gedächtnis, Verlauf (Ringpuffer),
+                   Grenzwert-/Alarm-Konfiguration
+  events.rs        Ereignis-Log events.csv
+  tray.rs          Symbol im Infobereich (zur Laufzeit erzeugte Icons)
+  autostart.rs     Run-Schlüssel in HKCU
+  tip.rs           eigener Tooltip
   render.rs        Layout + Zeichnen (GDI+/GDI), Farben
   source/mod.rs    trait PsuSource
   source/mahm.rs   Afterburner-Shared-Memory (Parsing + Verbindung)
