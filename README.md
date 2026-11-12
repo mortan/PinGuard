@@ -21,7 +21,8 @@ The same load cycle in the minimal view:
 ## Requirements
 
 - Windows 11
-- **MSI MPG Ai1300TS PCIE5** with its USB cable connected to the mainboard
+- **MSI MPG Ai1300TS PCIE5** with its USB cable connected to the **G.I. port** of the PSU and to
+  a USB header on the mainboard
 - **[MSI Afterburner](https://www.msi.com/Landing/afterburner/graphics-cards)** **4.6.7 or newer**,
   running in the background
 
@@ -34,16 +35,25 @@ Server (the on-screen display) is not needed.
 
 You only need to do this once.
 
-MSI describes the same setup with screenshots in their article
+MSI describes the plugin setup in their article
 [MSI GPU Safeguard+ x MSI Afterburner](https://www.msi.com/blog/msi-gpu-safeguard-msi-afterburner-protect-your-gpu-by-reducing-power-during-abnormal-current).
 
 1. Install MSI Afterburner 4.6.7 or newer, only from msi.com or Guru3D (MSI warns about fake
    download sites). The PSU plugin (`Plugins\Monitoring\PSU.dll`) is included.
 2. Open Afterburner's **Settings** and go to the **Monitoring** tab.
+
+   ![Monitoring tab with the … button next to "Active hardware monitoring graphs"](docs/afterburner/1-monitoring-tab.png)
+
 3. Click the **…** button next to *Active hardware monitoring graphs*. In the window
    *Hardware monitoring plugins*, tick **PSU.dll** and confirm with OK.
+
+   ![Hardware monitoring plugins with PSU.dll ticked](docs/afterburner/2-plugins.png)
+
 4. Back in the list of *Active hardware monitoring graphs*, the new PSU entries now appear. Tick
    these (Afterburner only publishes ticked entries):
+
+   ![The PSU entries ticked in the list of monitoring graphs](docs/afterburner/3-psu-sources.png)
+
    - `PSU 12VHPWR1_1 current` … `PSU 12VHPWR1_6 current` (the six pins, **required**)
    - `PSU 12VHPWR2_1 current` … `PSU 12VHPWR2_6 current` (second connector, if your card has one)
    - `PSU 12VHPWR1 alarm`, `PSU 12VHPWR2 alarm`
@@ -68,11 +78,16 @@ Both work side by side.
 
 1. In the **Monitoring** tab, select `PSU 12VHPWR1 alarm` (or `PSU 12VHPWR2 alarm` for the
    connector you actually use) and tick **Enable MSI GPU Safeguard+**.
-2. Click the **…** button next to it, tick **Launch application on alarm** and load the
-   **lowpowerprofile** that ships with Afterburner.
 
-Screenshots of both steps are in
-[MSI's article](https://www.msi.com/blog/msi-gpu-safeguard-msi-afterburner-protect-your-gpu-by-reducing-power-during-abnormal-current).
+   ![PSU 12VHPWR1 alarm selected with "Enable MSI GPU Safeguard+" ticked](docs/afterburner/4-gpu-safeguard.png)
+
+2. Click the **…** button next to it. In *Alarm settings*, tick **Launch application on alarm**
+   and load the **lowpowerprofile** that ships with Afterburner with the **…** button next to
+   *Command line* (path `%AB%`, command line `-lowpowerprofile …`). *Play sound on alarm* adds a
+   warning sound on the PC.
+
+   ![Alarm settings with "Launch application on alarm" and the lowpowerprofile command line](docs/afterburner/5-alarm-settings.png)
+
 If an alarm fires, shut the PC down and check that the 12V-2x6 connector is fully seated and the
 cable is undamaged.
 
