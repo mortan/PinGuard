@@ -56,7 +56,9 @@ Note: PSU power is the DC output power. The draw from the wall is roughly PSU po
 ## Controls
 
 - **Drag** anywhere to move the window. **Resize** from the edges; the aspect ratio is kept.
-- **Minimize / close:** buttons appear at the top right while the mouse is over the window.
+- **Minimal view / minimize / close:** buttons appear at the top right while the mouse is over the
+  window.
+- **M key:** switch between the full and the minimal view (while the window is active).
 - **Click the status line or the connection dot:** clear latched alarms.
 - **Double-click:** reset the peaks.
 - **Right-click:** menu with reset, *Limits and alarms …*, *Minimal view*, *Always on top*,
@@ -65,12 +67,13 @@ Note: PSU power is the DC output power. The draw from the wall is roughly PSU po
 
 ### Minimal view
 
-Right-click → *Minimal view* shrinks the window to the pin bars. Below them are the connector power
+The view button at the top right, the **M** key or right-click → *Minimal view* shrink the window
+to the pin bars. Below them are the connector power
 and a single status field: **ALL OK** with a green dot, red with the alarm name while an alarm is
 active (further alarms as "+1", "+2" …), or an orange outline while an alarm is latched. The link
 to Afterburner is part of this field, so a lost connection shows up there. Hover over the field to
-see every alarm's state, and click it to clear latched alarms. Choose the menu item again to return
-to the full view. The window keeps its height, and the choice is remembered.
+see every alarm's state, and click it to clear latched alarms. The same button, key or menu item
+returns to the full view. The window keeps its height, and the choice is remembered.
 
 ### Tray
 

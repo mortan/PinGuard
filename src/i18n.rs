@@ -123,12 +123,16 @@ pub struct Texts {
     pub menu_log_open: &'static str,
     pub menu_tray: &'static str,
     pub menu_autostart: &'static str,
+    pub menu_minimal: &'static str,
     pub menu_exit: &'static str,
 
     // Fensterknöpfe (Tooltips)
     pub btn_minimize: &'static str,
     pub btn_minimize_tray: &'static str,
     pub btn_close: &'static str,
+    /// Umschaltknopf, je nach Zielansicht
+    pub btn_minimal: &'static str,
+    pub btn_full: &'static str,
 
     // Hauptfenster
     /// "Stecker" in Panel-Titel und Klammern ("Stecker 1")
@@ -140,6 +144,8 @@ pub struct Texts {
     pub head_hist: &'static str,
     /// Statusfelder in `Fault`-Reihenfolge
     pub chips: [&'static str; FAULT_COUNT],
+    /// Sammel-Statusfeld der Minimalansicht ohne Alarm
+    pub chip_ok: &'static str,
     // Kennzahl-Labels (kurz: ca. 50 Basiseinheiten bei 10er-Schrift)
     pub lbl_power: &'static str,
     pub lbl_sum: &'static str,
@@ -214,16 +220,20 @@ static DE: Texts = Texts {
     menu_log_open: "Ordner öffnen",
     menu_tray: "In den Infobereich minimieren",
     menu_autostart: "Mit Windows starten",
+    menu_minimal: "Minimalansicht	M",
     menu_exit: "Beenden",
     btn_minimize: "Minimieren",
     btn_minimize_tray: "In den Infobereich minimieren",
     btn_close: "Beenden",
+    btn_minimal: "Minimalansicht (M)",
+    btn_full: "Volle Ansicht (M)",
 
     connector: "Stecker",
     head_conn: "STECKER",
     head_psu: "NETZTEIL",
     head_hist: "VERLAUF · 2 MIN",
     chips: ["ALARM S1", "ALARM S2", "ÜBERSTROM", "SCHIEFLAST", "VERBINDUNG"],
+    chip_ok: "ALLES OK",
     lbl_power: "Leistung",
     lbl_sum: "Σ Strom",
     lbl_max: "Max",
@@ -313,16 +323,20 @@ static EN: Texts = Texts {
     menu_log_open: "Open folder",
     menu_tray: "Minimize to notification area",
     menu_autostart: "Start with Windows",
+    menu_minimal: "Minimal view	M",
     menu_exit: "Exit",
     btn_minimize: "Minimize",
     btn_minimize_tray: "Minimize to tray",
     btn_close: "Exit",
+    btn_minimal: "Minimal view (M)",
+    btn_full: "Full view (M)",
 
     connector: "Connector",
     head_conn: "CONNECTOR",
     head_psu: "PSU",
     head_hist: "HISTORY · 2 MIN",
     chips: ["ALARM C1", "ALARM C2", "OVERCURRENT", "IMBALANCE", "LINK"],
+    chip_ok: "ALL OK",
     lbl_power: "Power",
     lbl_sum: "Σ Amps",
     lbl_max: "Max",

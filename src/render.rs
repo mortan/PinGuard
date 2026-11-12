@@ -24,6 +24,24 @@ pub const STATUS_Y0: f32 = 166.0;
 pub const STATUS_Y1: f32 = 190.0;
 pub const STATUS_X0: f32 = 6.0;
 pub const STATUS_X1: f32 = 434.0;
+/// Breite der Minimalansicht (nur das Balken-Panel, gleiche Höhe).
+pub const MIN_W: f32 = 212.0;
+/// Statuszeile der Minimalansicht: Steckerleistung links, Sammelstatus rechts.
+const MIN_POWER_X1: f32 = 70.0;
+const MIN_CHIP_X0: f32 = 75.0;
+const MIN_X1: f32 = 206.0;
+
+/// Basisgröße des Layouts (Breite, Höhe) je nach Ansicht.
+pub fn base_size(minimal: bool) -> (f32, f32) {
+    (if minimal { MIN_W } else { BASE_W }, BASE_H)
+}
+
+/// Klickfläche der Statuszeile (Klick = gehaltene Alarme zurücksetzen).
+pub fn status_hit(x: f32, y: f32, minimal: bool) -> bool {
+    let x0 = if minimal { MIN_CHIP_X0 } else { STATUS_X0 };
+    let x1 = if minimal { MIN_X1 } else { STATUS_X1 };
+    (x0..=x1).contains(&x) && (STATUS_Y0..=STATUS_Y1).contains(&y)
+}
 
 // Farben (Ampel aus den RTSS-Overlays übernommen)
 const GREEN: u32 = 0x3CDC78;
@@ -208,8 +226,10 @@ pub fn link_hit(x: f32, y: f32, cfg: &Config, monitor: &Monitor) -> bool {
 /// erscheinen nur, solange die Maus über dem Fenster steht.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WinButton {
-    Minimize = 0,
-    Close = 1,
+    /// Zwischen voller und Minimalansicht umschalten
+    View = 0,
+    Minimize = 1,
+    Close = 2,
 }
 
 /// Zustand der Fensterknöpfe.
@@ -221,18 +241,19 @@ pub struct Chrome {
     pub hot: Option<WinButton>,
 }
 
-const WIN_BUTTONS: [WinButton; 2] = [WinButton::Minimize, WinButton::Close];
+const WIN_BUTTONS: [WinButton; 3] = [WinButton::View, WinButton::Minimize, WinButton::Close];
 
-fn button_rect(b: WinButton) -> R {
-    let x = 394.0 + b as u32 as f32 * 19.0;
+fn button_rect(b: WinButton, minimal: bool) -> R {
+    // In der Minimalansicht oben rechts im Balken-Panel
+    let x = if minimal { 147.0 } else { 375.0 } + b as u32 as f32 * 19.0;
     rect(x, 10.0, x + 16.0, 22.0)
 }
 
 /// Fensterknopf an einem Punkt in Basiskoordinaten (mit etwas Rand, damit
 /// zwischen den Knöpfen keine tote Stelle bleibt).
-pub fn button_at(x: f32, y: f32) -> Option<WinButton> {
+pub fn button_at(x: f32, y: f32, minimal: bool) -> Option<WinButton> {
     WIN_BUTTONS.into_iter().find(|b| {
-        let r = button_rect(*b);
+        let r = button_rect(*b, minimal);
         (r.left - 1.5..r.right + 1.5).contains(&x) && (r.top - 2.0..r.bottom + 2.0).contains(&y)
     })
 }
@@ -253,6 +274,92 @@ fn visible_chips(v: &View) -> Vec<(Fault, &'static str, R)> {
             (*f, *label, rect(x, STATUS_Y0, x + cw, STATUS_Y1))
         })
         .collect()
+}
+
+/// Sammelstatus der Minimalansicht: alle angezeigten Fehlerarten
+/// einschließlich der Verbindung (dort gibt es keinen Verbindungspunkt).
+fn min_faults(v: &View) -> Vec<Fault> {
+    FAULTS.iter().copied().filter(|f| v.monitor.show_fault(*f)).collect()
+}
+
+/// Zustand des Sammelstatus: aktive bzw. gehaltene (nicht mehr aktive)
+/// eingeschaltete Alarme.
+fn min_state(v: &View) -> (Vec<Fault>, Vec<Fault>) {
+    let on: Vec<Fault> = min_faults(v).into_iter().filter(|f| v.config.alarm(*f).enabled).collect();
+    let active = on.iter().copied().filter(|f| v.monitor.fault(*f).active).collect();
+    let latched = on
+        .iter()
+        .copied()
+        .filter(|f| {
+            let st = v.monitor.fault(*f);
+            st.latched && !st.active
+        })
+        .collect();
+    (active, latched)
+}
+
+/// Beschriftung des Sammelstatus: erster Alarm, weitere als „+N“.
+fn min_label(fs: &[Fault]) -> String {
+    match fs {
+        [] => t().chip_ok.to_string(),
+        [f] => t().chips[*f as usize].to_string(),
+        [f, rest @ ..] => format!("{} +{}", t().chips[*f as usize], rest.len()),
+    }
+}
+
+/// Beschreibung einer Fehlerart für den Tooltip.
+fn fault_what(lim: &Limits, f: Fault, source: &str) -> String {
+    match f {
+        Fault::Alarm1 => i18n::fault_alarm(1),
+        Fault::Alarm2 => i18n::fault_alarm(2),
+        Fault::OverCurrent => i18n::fault_overcurrent(&short(lim.pin_limit_a)),
+        Fault::Imbalance => match lim.imbalance_mode {
+            ImbalanceMode::Amps => i18n::fault_imbalance_amps(&short(lim.imbalance_a)),
+            ImbalanceMode::Percent => i18n::fault_imbalance_pct(&short(lim.imbalance_pct)),
+        },
+        Fault::NoData => i18n::fault_nodata(source),
+    }
+}
+
+/// Zustandstext einer Fehlerart für den Tooltip.
+fn fault_state(v: &View, f: Fault) -> &'static str {
+    let st = v.monitor.fault(f);
+    if !v.config.alarm(f).enabled {
+        t().st_disabled
+    } else if st.active {
+        t().st_active
+    } else if st.latched {
+        t().st_latched
+    } else {
+        t().st_ok
+    }
+}
+
+/// Tooltips der Statuszeile in der Minimalansicht.
+fn min_status_hint(x: f32, v: &View) -> Option<Hint> {
+    if (STATUS_X0..=MIN_POWER_X1).contains(&x) {
+        let pk = v.monitor.power_peak;
+        let both = match v.reading {
+            Reading::Data(s) => summary(s).is_some_and(|s| s.both),
+            _ => false,
+        };
+        return Some(Hint { id: 351, text: i18n::tip_conn_w(both, &opt(Some(pk).filter(|p| *p > 0.0), 0, "W")) });
+    }
+    if !(MIN_CHIP_X0..=MIN_X1).contains(&x) {
+        return None;
+    }
+    // Je Fehlerart Kurzname und Zustand, darunter ggf. das Gedächtnis
+    let mut text = String::new();
+    for f in min_faults(v) {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text += &format!("{}: {}", t().chips[f as usize], fault_state(v, f));
+        if let Some(m) = memo_text(v, f) {
+            text += &format!("\n   {m}");
+        }
+    }
+    Some(Hint { id: 350, text })
 }
 
 /// Zeile mit dem Alarm-Gedächtnis (Uhrzeit, schlimmster Wert, Dauer),
@@ -293,27 +400,15 @@ pub fn hint_at(x: f32, y: f32, v: &View) -> Option<Hint> {
 
     // Statuszeile
     if (STATUS_Y0..=STATUS_Y1).contains(&y) {
+        if v.minimal {
+            return min_status_hint(x, v);
+        }
         let (fault, _, _) = visible_chips(v).into_iter().find(|(_, _, r)| x >= r.left && x <= r.right)?;
-        let what = match fault {
-            Fault::Alarm1 => i18n::fault_alarm(1),
-            Fault::Alarm2 => i18n::fault_alarm(2),
-            Fault::OverCurrent => i18n::fault_overcurrent(&short(lim.pin_limit_a)),
-            Fault::Imbalance => match lim.imbalance_mode {
-                ImbalanceMode::Amps => i18n::fault_imbalance_amps(&short(lim.imbalance_a)),
-                ImbalanceMode::Percent => i18n::fault_imbalance_pct(&short(lim.imbalance_pct)),
-            },
-            Fault::NoData => return None,
-        };
-        let st = v.monitor.fault(fault);
-        let state = if !v.config.alarm(fault).enabled {
-            t().st_disabled
-        } else if st.active {
-            t().st_active
-        } else if st.latched {
-            t().st_latched
-        } else {
-            t().st_ok
-        };
+        if fault == Fault::NoData {
+            return None;
+        }
+        let what = fault_what(lim, fault, v.source_name);
+        let state = fault_state(v, fault);
         let text = match memo_text(v, fault) {
             Some(m) => format!("{what}\n{state}\n{m}"),
             None => format!("{what}\n{state}"),
@@ -321,8 +416,8 @@ pub fn hint_at(x: f32, y: f32, v: &View) -> Option<Hint> {
         return hint(300 + fault as u32, text);
     }
 
-    // Verbindungspunkt
-    if link_hit(x, y, v.config, v.monitor) {
+    // Verbindungspunkt (nicht in der Minimalansicht)
+    if !v.minimal && link_hit(x, y, v.config, v.monitor) {
         let st = v.monitor.fault(Fault::NoData);
         let text = if !v.config.alarm(Fault::NoData).enabled {
             format!("{}\n{}", i18n::link_about(v.source_name), t().st_disabled)
@@ -340,6 +435,10 @@ pub fn hint_at(x: f32, y: f32, v: &View) -> Option<Hint> {
         return hint(300 + Fault::NoData as u32, text);
     }
 
+    // Minimalansicht: rechts vom Balken-Panel gibt es nichts
+    if v.minimal && x > MIN_W {
+        return None;
+    }
     // Verlaufskurve (auch ohne aktuelle Daten, der Verlauf bleibt)
     let layout = metric_layout(v.config);
     if layout.chart.is_some_and(|r| (r.left..r.right).contains(&x) && (r.top..r.bottom).contains(&y)) {
@@ -509,6 +608,8 @@ pub struct Renderer {
     pub mean_legend: Option<(f32, f32)>,
     /// Fensterknöpfe; setzt `main.rs` aus der Mausposition.
     pub chrome: Chrome,
+    /// Minimalansicht (schmaleres Basisraster); setzt `main.rs`.
+    pub minimal: bool,
 }
 
 /// Was gezeichnet werden soll.
@@ -522,6 +623,8 @@ pub struct View<'a> {
     /// x-Bereich der Mittelwert-Legende beim letzten Zeichnen
     /// (`Renderer::mean_legend`; ihre Breite hängt von der Schrift ab)
     pub mean_legend: Option<(f32, f32)>,
+    /// Minimalansicht (`Renderer::minimal`)
+    pub minimal: bool,
 }
 
 impl Renderer {
@@ -545,6 +648,7 @@ impl Renderer {
             font_px: 0.0,
             mean_legend: None,
             chrome: Chrome::default(),
+            minimal: false,
         })
     }
 
@@ -578,8 +682,9 @@ impl Renderer {
     pub fn update_layout(&mut self, w: u32, h: u32) {
         let k = self.dpi / 96.0;
         let (wd, hd) = (w as f32 / k, h as f32 / k);
-        self.scale = (wd / BASE_W).min(hd / BASE_H).max(0.1);
-        self.offset = ((wd - BASE_W * self.scale) / 2.0, (hd - BASE_H * self.scale) / 2.0);
+        let (bw, bh) = base_size(self.minimal);
+        self.scale = (wd / bw).min(hd / bh).max(0.1);
+        self.offset = ((wd - bw * self.scale) / 2.0, (hd - bh * self.scale) / 2.0);
     }
 
     /// Wandelt Clientpixel in Basiskoordinaten.
@@ -649,7 +754,7 @@ impl Renderer {
 
             let p = Painter { g, dc, brush, path, pen, px, ox: self.offset.0 * k, oy: self.offset.1 * k, fonts: &self.fonts, pending: Default::default() };
             self.mean_legend = p.draw(v);
-            p.draw_buttons(self.chrome);
+            p.draw_buttons(self.chrome, self.minimal);
             GdipFlush(g, FlushIntentionSync);
 
             GdipDeletePen(pen);
@@ -761,12 +866,18 @@ impl Painter<'_> {
 
         // Panels
         self.fill_round(rect(6.0, 6.0, 206.0, 160.0), 6.0, PANEL, 1.0);
-        self.fill_round(rect(212.0, 6.0, 434.0, 160.0), 6.0, PANEL, 1.0);
+        if !v.minimal {
+            self.fill_round(rect(212.0, 6.0, 434.0, 160.0), 6.0, PANEL, 1.0);
+        }
 
         let legend = self.draw_bars(v, stats.as_ref(), &vis[..nvis]);
-        self.draw_metrics(v.config, &v.monitor.history, snap, stats.as_ref(), &vis[..nvis]);
-        self.draw_link(v);
-        self.draw_status(v);
+        if v.minimal {
+            self.draw_min_status(v, snap);
+        } else {
+            self.draw_metrics(v.config, &v.monitor.history, snap, stats.as_ref(), &vis[..nvis]);
+            self.draw_link(v);
+            self.draw_status(v);
+        }
 
         // Hinweis bei fehlenden Daten über dem Balken-Panel
         let hint = match v.reading {
@@ -1079,23 +1190,35 @@ impl Painter<'_> {
 
     /// Minimieren und Schließen oben rechts im Kennzahlen-Panel; über der
     /// Überschriftenlinie, die dafür freigestellt wird.
-    fn draw_buttons(&self, chrome: Chrome) {
+    fn draw_buttons(&self, chrome: Chrome, minimal: bool) {
         if !chrome.shown {
             return;
         }
-        self.fill(rect(389.0, 8.0, 432.0, 24.0), PANEL, 1.0);
+        let (l, r) = (button_rect(WinButton::View, minimal).left - 5.0, button_rect(WinButton::Close, minimal).right + 3.0);
+        self.fill(rect(l, 8.0, r, 24.0), PANEL, 1.0);
         for b in WIN_BUTTONS {
-            let r = button_rect(b);
+            let r = button_rect(b, minimal);
             let hot = chrome.hot == Some(b);
             let bg = match (hot, b) {
                 (false, _) => TRACK,
                 (true, WinButton::Close) => RED,
-                (true, WinButton::Minimize) => 0x343944,
+                (true, _) => 0x343944,
             };
             self.fill_round(r, 3.0, bg, 1.0);
             let (cx, cy) = ((r.left + r.right) / 2.0, (r.top + r.bottom) / 2.0);
             let col = if hot { 0xFFFFFF } else { TEXT };
             match b {
+                // Umriss der Zielansicht: schmal (nur Balken) bzw. breit mit
+                // Trennlinie (Balken und Kennzahlen)
+                WinButton::View => unsafe {
+                    self.pending.set(true);
+                    GdipSetPenColor(self.pen, argb(col, 1.0));
+                    let hw = if minimal { 4.2 } else { 2.4 };
+                    GdipDrawRectangle(self.g, self.pen, cx - hw, cy - 3.0, 2.0 * hw, 6.0);
+                    if minimal {
+                        GdipDrawLine(self.g, self.pen, cx - 0.6, cy - 3.0, cx - 0.6, cy + 3.0);
+                    }
+                },
                 WinButton::Minimize => self.fill(rect(cx - 3.2, cy + 1.0, cx + 3.2, cy + 2.1), col, 1.0),
                 WinButton::Close => unsafe {
                     self.pending.set(true);
@@ -1132,6 +1255,32 @@ impl Painter<'_> {
         } else {
             clear(cx - 6.5);
             dot(2.2, GREEN, 0.9);
+        }
+    }
+
+    /// Statuszeile der Minimalansicht: Steckerleistung und ein Sammelfeld
+    /// (rot = aktiv, orange umrandet = gehalten, sonst grüner Punkt).
+    fn draw_min_status(&self, v: &View, snap: Option<&PsuSnapshot>) {
+        let pr = rect(STATUS_X0, STATUS_Y0, MIN_POWER_X1, STATUS_Y1);
+        self.fill_round(pr, 4.0, PANEL, 1.0);
+        let watts = snap.and_then(summary).map(|s| s.watts);
+        self.text(&opt(watts, 0, "W"), F::Value, pr, Align::Center, ACCENT, 1.0);
+
+        let r = rect(MIN_CHIP_X0, STATUS_Y0, MIN_X1, STATUS_Y1);
+        let (active, latched) = min_state(v);
+        if !active.is_empty() {
+            self.fill_round(r, 4.0, RED, 1.0);
+            self.text(&min_label(&active), F::Chip, r, Align::Center, 0xFFFFFF, 1.0);
+        } else if !latched.is_empty() {
+            self.fill_round(r, 4.0, AMBER, 1.0);
+            self.fill_round(rect(r.left + 1.2, r.top + 1.2, r.right - 1.2, r.bottom - 1.2), 3.0, PANEL, 1.0);
+            self.text(&min_label(&latched), F::Chip, r, Align::Center, AMBER, 1.0);
+        } else {
+            self.fill_round(r, 4.0, PANEL, 1.0);
+            let label = min_label(&[]);
+            let x = (r.left + r.right - (self.text_width(&label, F::Chip) + 9.0)) / 2.0;
+            self.fill_round(rect(x, r.top + 10.0, x + 4.0, r.top + 14.0), 2.0, GREEN, 0.8);
+            self.text(&label, F::Chip, rect(x + 9.0, r.top, r.right, r.bottom), Align::Left, DIM, 1.0);
         }
     }
 
@@ -1180,7 +1329,7 @@ mod tests {
         let (cfg, mut mon) = (Config::default(), Monitor::default());
         let reading = Reading::Data(snapshot());
         mon.update(Some(&snapshot()), &cfg);
-        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None };
+        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None, minimal: false };
 
         // Pin 3 von Stecker 1: Wert und Peak, gleiche id im ganzen Balken
         let h = hint_at(88.0, 100.0, &v).unwrap();
@@ -1218,7 +1367,7 @@ mod tests {
         assert!(l.cells.iter().all(|(_, r)| r.bottom <= ch.top - 11.9));
         // nichts eingeblendet: kein Tooltip, keine Schienen
         let none = Config { show: [false; METRIC_COUNT], ..cfg };
-        let vn = View { reading: &reading, monitor: &mon, config: &none, source_name: "Test", now_ms: 0, mean_legend: None };
+        let vn = View { reading: &reading, monitor: &mon, config: &none, source_name: "Test", now_ms: 0, mean_legend: None, minimal: false };
         assert!(hint_at(250.0, 58.0, &vn).is_none() && hint_at(250.0, 150.0, &vn).is_none());
         // Statuszeile: ALARM S2 ist ausgeblendet, die Verbindung hat ihren
         // eigenen Punkt, bleiben drei Felder
@@ -1242,35 +1391,78 @@ mod tests {
 
         // ohne Daten nur die Statuszeile
         let off = Reading::Offline;
-        let v = View { reading: &off, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None };
+        let v = View { reading: &off, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None, minimal: false };
         assert!(hint_at(88.0, 100.0, &v).is_none());
         assert!(hint_at(420.0, 178.0, &v).is_some());
         // Ausfall: Punkt samt Text ist aktiv, danach gehalten bis zum Zurücksetzen
         mon.update(None, &cfg);
-        let v = View { reading: &off, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None };
+        let v = View { reading: &off, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None, minimal: false };
         assert!(hint_at(400.0, 77.0, &v).unwrap().text.contains("Jetzt aktiv."));
         mon.update(Some(&snapshot()), &cfg);
-        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None };
+        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None, minimal: false };
         assert!(hint_at(422.0, 77.0, &v).unwrap().text.contains("Klick setzt zurück."));
         mon.clear_faults();
-        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None };
+        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None, minimal: false };
         assert!(!hint_at(422.0, 77.0, &v).unwrap().text.contains('\n'));
     }
 
     #[test]
     fn window_buttons() {
-        assert_eq!(button_at(402.0, 16.0), Some(WinButton::Minimize));
-        assert_eq!(button_at(421.0, 16.0), Some(WinButton::Close));
-        assert_eq!(button_at(411.5, 16.0), Some(WinButton::Close)); // Lücke gehört zu einem Knopf
-        assert_eq!(button_at(380.0, 16.0), None);
-        assert_eq!(button_at(402.0, 30.0), None);
+        assert_eq!(button_at(402.0, 16.0, false), Some(WinButton::Minimize));
+        assert_eq!(button_at(421.0, 16.0, false), Some(WinButton::Close));
+        assert_eq!(button_at(411.5, 16.0, false), Some(WinButton::Close)); // Lücke gehört zu einem Knopf
+        assert_eq!(button_at(383.0, 16.0, false), Some(WinButton::View));
+        assert_eq!(button_at(370.0, 16.0, false), None);
+        assert_eq!(button_at(402.0, 30.0, false), None);
         // im Panel und innerhalb der Größenränder des Fensters
-        let r = button_rect(WinButton::Close);
+        let r = button_rect(WinButton::Close, false);
         assert!(r.right < 434.0 - 3.0 && r.top > 6.0 + 3.0);
+        // Minimalansicht: oben rechts im Balken-Panel
+        let r = button_rect(WinButton::Close, true);
+        assert!(r.right < 206.0 - 3.0 && r.top > 6.0 + 3.0);
+        assert_eq!(button_at(174.0, 16.0, true), Some(WinButton::Minimize));
+        assert_eq!(button_at(155.0, 16.0, true), Some(WinButton::View));
+        assert_eq!(button_at(402.0, 16.0, true), None);
         for l in [i18n::Lang::De, i18n::Lang::En] {
             i18n::set_lang(l);
             assert!(!t().btn_minimize.is_empty() && !t().btn_minimize_tray.is_empty() && !t().btn_close.is_empty());
         }
+    }
+
+    #[test]
+    fn minimal_view() {
+        i18n::set_lang(i18n::Lang::De);
+        let cfg = Config::default();
+        let mut mon = Monitor::default();
+        let reading = Reading::Data(snapshot());
+        mon.update(Some(&snapshot()), &cfg);
+        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None, minimal: true };
+        // Balken wie in der vollen Ansicht
+        assert_eq!(hint_at(88.0, 100.0, &v).unwrap().id, 102);
+        // Statuszeile: Leistung links, Sammelstatus rechts mit allen Fehlerarten
+        assert!(hint_at(30.0, 178.0, &v).unwrap().text.contains("Peak seit Start: 450 W"));
+        let st = hint_at(140.0, 178.0, &v).unwrap();
+        assert_eq!(st.id, 350);
+        assert!(st.text.starts_with("ALARM S1: In Ordnung.\n") && st.text.contains("VERBINDUNG: In Ordnung."), "{}", st.text);
+        assert!(!st.text.contains("ALARM S2")); // Stecker 2 nie belegt
+        assert_eq!(min_label(&min_state(&v).0), "ALLES OK");
+        // Kennzahlen, Verbindungspunkt und alte Statusfelder gibt es nicht
+        assert!(hint_at(72.0, 178.0, &v).is_none());
+        assert!(!status_hit(30.0, 178.0, true) && status_hit(140.0, 178.0, true));
+        // Überstrom und Schieflast aktiv: erster Name plus Anzahl
+        let mut hot = snapshot();
+        hot.vals[idx::PIN0 + 2] = Some(9.6);
+        mon.update(Some(&hot), &cfg);
+        let reading = Reading::Data(hot);
+        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None, minimal: true };
+        assert_eq!(min_label(&min_state(&v).0), "ÜBERSTROM +1");
+        // Ausfall der Verbindung erscheint ebenfalls im Sammelstatus
+        mon.clear_faults();
+        mon.update(None, &cfg);
+        let off = Reading::Offline;
+        let v = View { reading: &off, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None, minimal: true };
+        assert_eq!(min_label(&min_state(&v).0), "VERBINDUNG");
+        assert_eq!(base_size(true), (MIN_W, BASE_H));
     }
 
     #[test]
@@ -1279,7 +1471,7 @@ mod tests {
         let (cfg, mut mon) = (Config::default(), Monitor::default());
         let reading = Reading::Data(snapshot());
         mon.update(Some(&snapshot()), &cfg);
-        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None };
+        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None, minimal: false };
         let h = hint_at(88.0, 100.0, &v).unwrap();
         assert_eq!(h.id, 102);
         assert!(h.text.starts_with("Connector 1 · Pin 3") && h.text.contains("6.20 A"), "{}", h.text);
@@ -1288,7 +1480,7 @@ mod tests {
         assert!(hint_at(250.0, 34.0, &v).unwrap().text.ends_with("Peak since start: 450 W (double-click resets)"));
         let mut reset = mon.clone();
         reset.clear_peaks();
-        let vr = View { monitor: &reset, ..View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None } };
+        let vr = View { monitor: &reset, ..View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None, minimal: false } };
         assert!(hint_at(250.0, 34.0, &vr).unwrap().text.contains("Peak since start: –"));
         assert!(hint_at(250.0, 150.0, &v).unwrap().text.starts_with("12 V rail"));
         let ok = hint_at(60.0, 178.0, &v).unwrap().text;
@@ -1317,13 +1509,13 @@ mod tests {
         i18n::set_lang(i18n::Lang::De);
         {
             // Standard: Linie aus, an ihrer Stelle der Pin-Balken
-            let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None };
+            let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None, minimal: false };
             assert_eq!(hint_at(88.0, y_mean, &v).unwrap().id, 102);
             assert_eq!(hint_at(88.0, y_warn, &v).unwrap().id, 2); // Warnlinie an
         }
         cfg.show[Metric::MeanLine as usize] = true;
         cfg.show[Metric::WarnLine as usize] = false;
-        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: Some((120.0, 157.0)) };
+        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: Some((120.0, 157.0)), minimal: false };
         let h = hint_at(88.0, y_mean + 2.0, &v).unwrap();
         assert_eq!(h.id, 3);
         assert!(h.text.starts_with("Mittelwert der sechs Pins: 6,25 A\n"), "{}", h.text);
@@ -1333,7 +1525,7 @@ mod tests {
         assert_eq!(hint_at(88.0, amp_y(&cfg.limits, 9.2), &v).unwrap().id, 1);
         // Legende in der Titelzeile
         assert_eq!(hint_at(140.0, 17.0, &v).unwrap().id, 4);
-        let vn = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None };
+        let vn = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None, minimal: false };
         assert!(hint_at(140.0, 17.0, &vn).is_none());
         i18n::set_lang(i18n::Lang::En);
         assert!(hint_at(88.0, y_mean, &v).unwrap().text.starts_with("Mean of the six pins: 6.25 A\n"));
@@ -1344,7 +1536,7 @@ mod tests {
             two.vals[idx::PIN0 + PINS + p] = Some(3.0);
         }
         let r2 = Reading::Data(two);
-        let v2 = View { reading: &r2, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None };
+        let v2 = View { reading: &r2, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None, minimal: false };
         let y2 = amp_y(&cfg.limits, 3.0);
         assert!(hint_at(180.0, y2, &v2).unwrap().text.starts_with("Mean of the six pins of connector 2: 3.00 A"));
         assert_ne!(hint_at(40.0, y2, &v2).unwrap().id, 3); // über Stecker 1 liegt dort keine Linie
@@ -1352,7 +1544,7 @@ mod tests {
         assert!(hint_at(40.0, y_mean, &v2).unwrap().text.starts_with("Mittelwert der sechs Pins von Stecker 1: 6,25 A"));
         // Stecker ohne Strom: keine Linie
         let idle = Reading::Data(snap_idle());
-        let vi = View { reading: &idle, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: Some((120.0, 157.0)) };
+        let vi = View { reading: &idle, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: Some((120.0, 157.0)), minimal: false };
         assert_ne!(hint_at(88.0, BAR_BOTTOM - 0.5, &vi).map(|h| h.id), Some(3));
         assert_ne!(hint_at(140.0, 17.0, &vi).map(|h| h.id), Some(4));
     }
@@ -1373,7 +1565,7 @@ mod tests {
         hot.vals[idx::PIN0 + 2] = Some(9.6);
         mon.update(Some(&hot), &cfg);
         let reading = Reading::Data(hot);
-        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None };
+        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None, minimal: false };
         i18n::set_lang(i18n::Lang::De);
         // Σ 37,5 − 6,2 + 9,6 = 40,9 A × 12 V; Δ 3,6 A löst auch Schieflast aus
         assert_eq!(tray_tip(&v), "PinGuard\nStecker 491 W · Max 9,6 A (P3)\nÜBERSTROM · SCHIEFLAST");
@@ -1381,7 +1573,7 @@ mod tests {
         assert_eq!(tray_tip(&v), "PinGuard\nConnector 491 W · max 9.6 A (P3)\nOVERCURRENT · IMBALANCE");
         let off = Reading::Offline;
         let mon = Monitor::default();
-        let v = View { reading: &off, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None };
+        let v = View { reading: &off, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None, minimal: false };
         assert_eq!(tray_tip(&v), "PinGuard\nTest not running");
         assert!(tray_tip(&v).encode_utf16().count() < 128);
     }
@@ -1395,7 +1587,7 @@ mod tests {
         hot.vals[idx::PIN0 + 2] = Some(9.6);
         mon.update_at(Some(&hot), &cfg, at(1_000, 32));
         let reading = Reading::Data(hot);
-        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 5_000, mean_legend: None };
+        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 5_000, mean_legend: None, minimal: false };
         // Überstrom ist das zweite Statusfeld (ALARM S2 ausgeblendet)
         i18n::set_lang(i18n::Lang::De);
         let h = hint_at(200.0, 178.0, &v).unwrap();
@@ -1407,13 +1599,13 @@ mod tests {
         mon.update_at(None, &cfg, at(10_000, 33));
         mon.update_at(Some(&snapshot()), &cfg, at(72_000, 34));
         let reading = Reading::Data(snapshot());
-        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 99_000, mean_legend: None };
+        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 99_000, mean_legend: None, minimal: false };
         assert!(hint_at(422.0, 77.0, &v).unwrap().text.ends_with("click to reset.\nTriggered 14:33, duration 1 min 2 s"));
         i18n::set_lang(i18n::Lang::De);
         assert!(hint_at(422.0, 77.0, &v).unwrap().text.ends_with("Ausgelöst 14:33 Uhr, Dauer 1 min 2 s"));
         // Zurücksetzen löscht das Gedächtnis
         mon.clear_faults();
-        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 99_000, mean_legend: None };
+        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 99_000, mean_legend: None, minimal: false };
         assert!(!hint_at(200.0, 178.0, &v).unwrap().text.contains("Ausgelöst"));
         assert!(!hint_at(422.0, 77.0, &v).unwrap().text.contains("Ausgelöst"));
     }
@@ -1432,7 +1624,7 @@ mod tests {
         for s in 100..110 {
             mon.record_power(s, Some(if s == 104 { &hot } else { &base }));
         }
-        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None };
+        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None, minimal: false };
         let l = metric_layout(&cfg);
         assert!(l.chart.is_some());
         i18n::set_lang(i18n::Lang::De);
@@ -1448,11 +1640,11 @@ mod tests {
         assert!(h.text.starts_with("Connector power over the last 2 minutes") && h.text.contains("Peak: 486 W (5 s ago)"), "{}", h.text);
         // auch ohne aktuelle Daten bleibt der Verlauf erklärt
         let off = Reading::Offline;
-        let v = View { reading: &off, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None };
+        let v = View { reading: &off, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None, minimal: false };
         assert!(hint_at(300.0, 105.0, &v).is_some());
         // leerer Verlauf
         let empty = Monitor::default();
-        let v = View { reading: &off, monitor: &empty, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None };
+        let v = View { reading: &off, monitor: &empty, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None, minimal: false };
         assert!(hint_at(300.0, 105.0, &v).unwrap().text.contains("Now: –\nPeak: –"));
     }
 
@@ -1490,6 +1682,13 @@ mod tests {
                 let w = width(c, F::Chip);
                 assert!(w + 9.0 + 12.0 <= chip_w, "Chip {c} passt nicht ({w})");
             }
+            // Sammelstatus der Minimalansicht: längster Name mit „+N“
+            for l in [i18n::Lang::De, i18n::Lang::En] {
+                i18n::set_lang(l);
+                let longest = t().chips.iter().chain([&t().chip_ok]).map(|c| width(&format!("{c} +4"), F::Chip)).fold(0.0, f32::max);
+                assert!(longest + 12.0 <= MIN_X1 - MIN_CHIP_X0, "Sammelstatus zu breit ({longest})");
+            }
+            assert!(width("1300 W", F::Value) + 6.0 <= MIN_POWER_X1 - STATUS_X0);
             // Text neben dem Verbindungspunkt bleibt in der Klickfläche
             for l in [i18n::Lang::De, i18n::Lang::En] {
                 i18n::set_lang(l);

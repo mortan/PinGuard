@@ -8,8 +8,8 @@
 //! Anzeige: `show_<key>` (0/1) mit `<key>` aus `Metric::key`.
 //! Sprache: `lang` = `auto` (nach Windows), `de` oder `en`; fehlt der
 //! Schlüssel (ältere INI), gilt `auto`. Ereignis-Log `event_log` (Standard 1),
-//! Infobereich `tray` (Standard 0). Autostart steht nicht hier, sondern
-//! nur in der Registry.
+//! Infobereich `tray` (Standard 0), Minimalansicht `minimal` (Standard 0).
+//! Autostart steht nicht hier, sondern nur in der Registry.
 
 use crate::i18n::LangPref;
 use crate::model::{Config, ImbalanceMode, FAULTS, METRICS};
@@ -20,6 +20,9 @@ pub struct Settings {
     /// Fensterrechteck in physischen Bildschirmpixeln (x, y, Breite, Höhe).
     pub rect: Option<(i32, i32, i32, i32)>,
     pub topmost: bool,
+    /// Minimalansicht: nur Pin-Balken, Steckerleistung und Sammelstatus
+    /// (Standard aus)
+    pub minimal: bool,
     /// Gewählte Sprache der Oberfläche
     pub lang: LangPref,
     /// Neue Alarme in `events.csv` aufzeichnen (Standard an)
@@ -32,7 +35,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { rect: None, topmost: false, lang: LangPref::Auto, event_log: true, tray: false, config: Config::default() }
+        Settings { rect: None, topmost: false, minimal: false, lang: LangPref::Auto, event_log: true, tray: false, config: Config::default() }
     }
 }
 
@@ -65,6 +68,7 @@ impl Settings {
                 "w" => w = v.parse().ok(),
                 "h" => h = v.parse().ok(),
                 "topmost" => s.topmost = v == "1",
+                "minimal" => s.minimal = v == "1",
                 "event_log" => s.event_log = v == "1",
                 "tray" => s.tray = v == "1",
                 "lang" => {
@@ -122,6 +126,8 @@ impl Settings {
             out += &format!("x={x}\ny={y}\nw={w}\nh={h}\n");
         }
         out += &format!("topmost={}\n", self.topmost as u8);
+        out += "# Minimalansicht: nur Pin-Balken, Steckerleistung und Sammelstatus\n";
+        out += &format!("minimal={}\n", self.minimal as u8);
         out += "# Infobereich: Symbol zeigen, Minimieren blendet aus der Taskleiste aus\n";
         out += &format!("tray={}\n", self.tray as u8);
         out += "# Neue Alarme in events.csv aufzeichnen\n";
@@ -183,7 +189,7 @@ mod tests {
 
     #[test]
     fn roundtrip() {
-        let mut s = Settings { rect: Some((-1700, 120, 660, 294)), topmost: true, lang: LangPref::En, event_log: false, tray: true, config: Config::default() };
+        let mut s = Settings { rect: Some((-1700, 120, 660, 294)), topmost: true, minimal: true, lang: LangPref::En, event_log: false, tray: true, config: Config::default() };
         s.config.show[Metric::History as usize] = true;
         s.config.show[Metric::MeanLine as usize] = true;
         s.config.show[Metric::WarnLine as usize] = false;
@@ -215,7 +221,8 @@ mod tests {
         let s = Settings::parse("x=1\ny=2\nw=600\nh=300\ntopmost=0\n");
         assert_eq!(s.config, Config::default());
         // neue Schlüssel fehlen: Log an, Tray aus, keine Verlaufskurve
-        assert!(s.event_log && !s.tray && !s.config.shows(Metric::History));
+        assert!(s.event_log && !s.tray && !s.minimal && !s.config.shows(Metric::History));
+        assert!(Settings::parse("minimal=1").minimal && !Settings::parse("minimal=ja").minimal);
         assert!(s.config.shows(Metric::WarnLine) && !s.config.shows(Metric::MeanLine));
         let s3 = Settings::parse("show_warn_line=0\nshow_mean_line=1");
         assert!(!s3.config.shows(Metric::WarnLine) && s3.config.shows(Metric::MeanLine));

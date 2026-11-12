@@ -55,6 +55,7 @@ const CMD_LOG_RECORD: usize = 10;
 const CMD_LOG_OPEN: usize = 11;
 const CMD_TRAY: usize = 12;
 const CMD_AUTOSTART: usize = 13;
+const CMD_MINIMAL: usize = 14;
 const CLASS: PCWSTR = w!("PinGuardWindow");
 
 struct App {
@@ -105,17 +106,19 @@ impl App {
                 render::WinButton::Minimize if self.settings.tray => tx.btn_minimize_tray,
                 render::WinButton::Minimize => tx.btn_minimize,
                 render::WinButton::Close => tx.btn_close,
+                render::WinButton::View if self.settings.minimal => tx.btn_full,
+                render::WinButton::View => tx.btn_minimal,
             };
             return Some(render::Hint { id: 400 + b as u32, text: text.to_string() });
         }
-        let view = View { reading: &self.reading, monitor: &self.monitor, config: &self.settings.config, source_name: self.source.name(), now_ms: now_ms(), mean_legend: self.renderer.mean_legend };
+        let view = View { reading: &self.reading, monitor: &self.monitor, config: &self.settings.config, source_name: self.source.name(), now_ms: now_ms(), mean_legend: self.renderer.mean_legend, minimal: self.renderer.minimal };
         render::hint_at(bx, by, &view)
     }
 
     /// Fensterknopf an dieser Stelle, falls die Knöpfe gerade zu sehen sind.
     fn button_at(&self, bx: f32, by: f32) -> Option<render::WinButton> {
         if self.renderer.chrome.shown {
-            render::button_at(bx, by)
+            render::button_at(bx, by, self.renderer.minimal)
         } else {
             None
         }
@@ -125,7 +128,7 @@ impl App {
     /// hervorheben; zeichnet nur bei einer Änderung neu.
     fn update_chrome(&mut self, hwnd: HWND) {
         let chrome = match self.cursor(hwnd) {
-            Some((_, (bx, by))) => render::Chrome { shown: true, hot: render::button_at(bx, by) },
+            Some((_, (bx, by))) => render::Chrome { shown: true, hot: render::button_at(bx, by, self.renderer.minimal) },
             None => render::Chrome::default(),
         };
         if chrome != self.renderer.chrome {
@@ -285,7 +288,7 @@ impl App {
             _ => None,
         };
         let status = self.monitor.status(snap, &self.settings.config);
-        let view = View { reading: &self.reading, monitor: &self.monitor, config: &self.settings.config, source_name: self.source.name(), now_ms: now_ms(), mean_legend: self.renderer.mean_legend };
+        let view = View { reading: &self.reading, monitor: &self.monitor, config: &self.settings.config, source_name: self.source.name(), now_ms: now_ms(), mean_legend: self.renderer.mean_legend, minimal: self.renderer.minimal };
         let tip = render::tray_tip(&view);
         self.tray.set(status, &tip);
     }
@@ -309,6 +312,25 @@ impl App {
                 let _ = InvalidateRect(hwnd, None, false);
             }
         }
+    }
+
+    /// Zwischen voller und Minimalansicht umschalten. Höhe und Ecke oben
+    /// links bleiben, die Breite folgt dem Seitenverhältnis der Ansicht.
+    fn set_minimal(&mut self, hwnd: HWND, minimal: bool) {
+        self.settings.minimal = minimal;
+        self.renderer.minimal = minimal;
+        self.tip_leave(hwnd);
+        unsafe {
+            let mut r = RECT::default();
+            if !IsIconic(hwnd).as_bool() && GetWindowRect(hwnd, &mut r).is_ok() {
+                let (bw, bh) = render::base_size(minimal);
+                let w = ((r.bottom - r.top) as f32 * bw / bh).round() as i32;
+                let _ = SetWindowPos(hwnd, None, r.left, r.top, w, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+            let _ = InvalidateRect(hwnd, None, false);
+        }
+        self.save_rect(hwnd);
+        self.settings.save();
     }
 
     fn save_rect(&mut self, hwnd: HWND) {
@@ -365,8 +387,8 @@ fn in_status(app: &App, x: i32, y: i32) -> bool {
     if app.button_at(bx, by).is_some() {
         return true;
     }
-    (render::STATUS_X0..=render::STATUS_X1).contains(&bx) && (render::STATUS_Y0..=render::STATUS_Y1).contains(&by)
-        || render::link_hit(bx, by, &app.settings.config, &app.monitor)
+    let minimal = app.renderer.minimal;
+    render::status_hit(bx, by, minimal) || !minimal && render::link_hit(bx, by, &app.settings.config, &app.monitor)
 }
 
 /// Sprache der Oberfläche nach Windows-Anzeigesprache.
@@ -399,6 +421,8 @@ unsafe fn show_menu(hwnd: HWND, app: &mut App, mut pt: POINT) {
     append(menu, MF_STRING, CMD_RESET_FAULTS, tx.menu_reset_faults);
     append(menu, MF_STRING, CMD_SETTINGS, tx.menu_settings);
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+    let min_on = if app.settings.minimal { MF_CHECKED } else { MF_UNCHECKED };
+    append(menu, MF_STRING | min_on, CMD_MINIMAL, tx.menu_minimal);
     let top = if app.settings.topmost { MF_CHECKED } else { MF_UNCHECKED };
     append(menu, MF_STRING | top, CMD_TOPMOST, tx.menu_topmost);
     let tray_on = if app.settings.tray { MF_CHECKED } else { MF_UNCHECKED };
@@ -446,6 +470,7 @@ unsafe fn show_menu(hwnd: HWND, app: &mut App, mut pt: POINT) {
             let _ = SetWindowPos(hwnd, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             app.settings.save();
         }
+        CMD_MINIMAL => app.set_minimal(hwnd, !app.settings.minimal),
         CMD_SETTINGS => {
             if let Some(c) = settings_dlg::edit(hwnd, app.settings.config) {
                 app.settings.config = c;
@@ -549,7 +574,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 let mut ps = PAINTSTRUCT::default();
                 let dc = BeginPaint(hwnd, &mut ps);
                 let (w, h) = client_size(hwnd);
-                let view = View { reading: &app.reading, monitor: &app.monitor, config: &app.settings.config, source_name: app.source.name(), now_ms: now_ms(), mean_legend: app.renderer.mean_legend };
+                let view = View { reading: &app.reading, monitor: &app.monitor, config: &app.settings.config, source_name: app.source.name(), now_ms: now_ms(), mean_legend: app.renderer.mean_legend, minimal: app.renderer.minimal };
                 app.renderer.render(dc, w, h, &view);
                 let _ = EndPaint(hwnd, &ps);
                 LRESULT(0)
@@ -592,6 +617,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                         app.tip_leave(hwnd);
                         let _ = ShowWindow(hwnd, SW_MINIMIZE);
                     }
+                    Some(render::WinButton::View) => {
+                        app.set_minimal(hwnd, !app.settings.minimal);
+                        // Knöpfe sitzen jetzt woanders
+                        app.update_chrome(hwnd);
+                    }
                     Some(render::WinButton::Close) => {
                         let _ = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
                     }
@@ -601,6 +631,12 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                     }
                     None => {}
                 }
+                LRESULT(0)
+            }
+            // Taste M schaltet die Ansicht um (ohne Tastenwiederholung)
+            WM_KEYDOWN if wp.0 == 'M' as usize && lp.0 & (1 << 30) == 0 => {
+                app.set_minimal(hwnd, !app.settings.minimal);
+                app.update_chrome(hwnd);
                 LRESULT(0)
             }
             WM_NCLBUTTONDBLCLK if wp.0 == HTCAPTION as usize => {
@@ -646,7 +682,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             WM_SIZING => {
                 // Seitenverhältnis des Layouts beibehalten (keine leeren Ränder).
                 let r = &mut *(lp.0 as *mut RECT);
-                let ratio = render::BASE_W / render::BASE_H;
+                let (bw, bh) = render::base_size(app.renderer.minimal);
+                let ratio = bw / bh;
                 let edge = wp.0 as u32;
                 if edge == WMSZ_TOP || edge == WMSZ_BOTTOM {
                     r.right = r.left + ((r.bottom - r.top) as f32 * ratio).round() as i32;
@@ -663,10 +700,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             WM_GETMINMAXINFO => {
                 let mmi = &mut *(lp.0 as *mut MINMAXINFO);
                 let dpi = GetDpiForWindow(hwnd).max(96) as f32 / 96.0;
-                mmi.ptMinTrackSize = POINT {
-                    x: (render::BASE_W * 0.5 * dpi) as i32,
-                    y: (render::BASE_H * 0.5 * dpi) as i32,
-                };
+                let (bw, bh) = render::base_size(app.renderer.minimal);
+                mmi.ptMinTrackSize = POINT { x: (bw * 0.5 * dpi) as i32, y: (bh * 0.5 * dpi) as i32 };
                 LRESULT(0)
             }
             WM_EXITSIZEMOVE => {
@@ -726,7 +761,8 @@ fn main() -> Result<()> {
             Box::new(MahmSource::new(name.map_or(MahmSource::DEFAULT_NAME, |s| s.as_str())))
         };
         let period = source.period_ms();
-        let Some(renderer) = Renderer::new() else { return Ok(()) };
+        let Some(mut renderer) = Renderer::new() else { return Ok(()) };
+        renderer.minimal = settings.minimal;
 
         let hinst: HINSTANCE = GetModuleHandleW(None)?.into();
         let wc = WNDCLASSEXW {
@@ -742,9 +778,12 @@ fn main() -> Result<()> {
         RegisterClassExW(&wc);
 
         let dpi = GetDpiForSystem().max(96) as f32 / 96.0;
-        let (dw, dh) = ((render::BASE_W * 1.25 * dpi) as i32, (render::BASE_H * 1.25 * dpi) as i32);
+        let (bw, bh) = render::base_size(settings.minimal);
+        let (dw, dh) = ((bw * 1.25 * dpi) as i32, (bh * 1.25 * dpi) as i32);
         let (x, y, w, h) = match settings.rect {
-            Some((x, y, w, _)) if on_screen(x, y, w, 10) => (x, y, w, (w as f32 * render::BASE_H / render::BASE_W).round() as i32),
+            // Höhe ist in beiden Ansichten gleich: Breite daraus ableiten,
+            // falls die Ansicht z. B. von Hand in der INI umgestellt wurde.
+            Some((x, y, w, h)) if on_screen(x, y, w, 10) => (x, y, (h as f32 * bw / bh).round() as i32, h),
             _ => (CW_USEDEFAULT, CW_USEDEFAULT, dw, dh),
         };
         let ex = if settings.topmost { WS_EX_TOPMOST } else { WINDOW_EX_STYLE(0) };
