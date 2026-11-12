@@ -12,17 +12,73 @@ pub struct Limits {
     pub pin_limit_a: f32,
     /// Vollausschlag der Pin-Balken.
     pub full_scale_a: f32,
-    /// Schieflast-Grenze (max − min über die 6 Pins); Standard = `CurrentDif`
-    /// des MSI-PSU-Plugins (GPU Safeguard+).
+    /// Wie Schieflast gemessen wird.
+    pub imbalance_mode: ImbalanceMode,
+    /// Schieflast-Grenze in A (max − min über die 6 Pins). Standard 3 A;
+    /// das MSI-PSU-Plugin (`CurrentDif`, GPU Safeguard+) nutzt 5,5 A, was bei
+    /// ~8,3 A/Pin unter Volllast erst sehr spät anschlägt.
     pub imbalance_a: f32,
+    /// Schieflast-Grenze in % (größte Abweichung eines Pins vom Mittelwert).
+    pub imbalance_pct: f32,
+    /// Prozent-Messung erst ab diesem Steckerstrom (Σ der 6 Pins), weil bei
+    /// wenig Last schon Messrauschen große Prozentwerte ergibt.
+    pub imbalance_min_load_a: f32,
     /// Nennleistung eines Steckers (Bezug für die Auslastung).
     pub connector_rated_w: f32,
 }
 
+/// Messart der Schieflast.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ImbalanceMode {
+    /// Absolut: größter − kleinster Pin in A (wie das MSI-Plugin).
+    #[default]
+    Amps,
+    /// Relativ: größte Abweichung vom Mittelwert in %, mit Mindestlast
+    /// (ähnlich WireView Pro II).
+    Percent,
+}
+
+impl ImbalanceMode {
+    pub fn key(self) -> &'static str {
+        match self {
+            ImbalanceMode::Amps => "amps",
+            ImbalanceMode::Percent => "percent",
+        }
+    }
+    pub fn from_key(k: &str) -> Option<Self> {
+        match k {
+            "amps" => Some(ImbalanceMode::Amps),
+            "percent" => Some(ImbalanceMode::Percent),
+            _ => None,
+        }
+    }
+}
+
 impl Default for Limits {
     fn default() -> Self {
-        Limits { pin_warn_a: 8.0, pin_limit_a: 9.2, full_scale_a: 12.0, imbalance_a: 5.5, connector_rated_w: 600.0 }
+        Limits {
+            pin_warn_a: 8.0,
+            pin_limit_a: 9.2,
+            full_scale_a: 12.0,
+            imbalance_mode: ImbalanceMode::Amps,
+            imbalance_a: 3.0,
+            imbalance_pct: 30.0,
+            imbalance_min_load_a: 20.0,
+            connector_rated_w: 600.0,
+        }
     }
+}
+
+/// Feldindizes für `Limits::validate` (Reihenfolge im Einstellungsdialog).
+pub mod field {
+    pub const PIN_WARN: usize = 0;
+    pub const PIN_LIMIT: usize = 1;
+    pub const FULL_SCALE: usize = 2;
+    pub const IMB_A: usize = 3;
+    pub const IMB_PCT: usize = 4;
+    pub const IMB_MIN_LOAD: usize = 5;
+    pub const RATED_W: usize = 6;
+    pub const COUNT: usize = 7;
 }
 
 impl Limits {
@@ -37,27 +93,70 @@ impl Limits {
         }
     }
 
-    /// Prüft die Werte; bei einem Fehler: (Feldindex, Meldung). Feldindex in
-    /// der Reihenfolge warn, limit, full_scale, imbalance, rated.
+    /// Schieflast-Kennwert eines Steckers in der gewählten Messart
+    /// (A bzw. %).
+    pub fn imbalance_value(&self, st: &ConnectorStats) -> f32 {
+        match self.imbalance_mode {
+            ImbalanceMode::Amps => st.imbalance_a,
+            ImbalanceMode::Percent => st.deviation_pct,
+        }
+    }
+
+    /// Grenze in der gewählten Messart (A bzw. %).
+    pub fn imbalance_limit(&self) -> f32 {
+        match self.imbalance_mode {
+            ImbalanceMode::Amps => self.imbalance_a,
+            ImbalanceMode::Percent => self.imbalance_pct,
+        }
+    }
+
+    /// Wird die Schieflast dieses Steckers überhaupt bewertet? (Stecker
+    /// führt Strom; bei Prozent zusätzlich Mindestlast erreicht.)
+    pub fn imbalance_armed(&self, st: &ConnectorStats) -> bool {
+        st.active() && (self.imbalance_mode == ImbalanceMode::Amps || st.sum_a >= self.imbalance_min_load_a)
+    }
+
+    /// 0 = unauffällig (oder nicht bewertet), 1 = ab halber Grenze, 2 = Alarm.
+    pub fn imbalance_level(&self, st: &ConnectorStats) -> u8 {
+        if !self.imbalance_armed(st) {
+            return 0;
+        }
+        let (v, l) = (self.imbalance_value(st), self.imbalance_limit());
+        if v >= l {
+            2
+        } else if v >= l * 0.5 {
+            1
+        } else {
+            0
+        }
+    }
+
+    /// Prüft die Werte; bei einem Fehler: (Feldindex aus `field`, Meldung).
     pub fn validate(&self) -> Result<(), (usize, &'static str)> {
         let ok = |v: f32, lo: f32, hi: f32| v.is_finite() && v >= lo && v <= hi;
         if !ok(self.pin_warn_a, 0.1, 50.0) {
-            return Err((0, "Gelb-Grenze muss zwischen 0,1 und 50 A liegen."));
+            return Err((field::PIN_WARN, "Gelb-Grenze muss zwischen 0,1 und 50 A liegen."));
         }
         if !ok(self.pin_limit_a, 0.1, 50.0) {
-            return Err((1, "Rot-Grenze muss zwischen 0,1 und 50 A liegen."));
+            return Err((field::PIN_LIMIT, "Rot-Grenze muss zwischen 0,1 und 50 A liegen."));
         }
         if self.pin_warn_a > self.pin_limit_a {
-            return Err((0, "Gelb-Grenze darf nicht über der Rot-Grenze liegen."));
+            return Err((field::PIN_WARN, "Gelb-Grenze darf nicht über der Rot-Grenze liegen."));
         }
         if !ok(self.full_scale_a, 1.0, 50.0) {
-            return Err((2, "Vollausschlag muss zwischen 1 und 50 A liegen."));
+            return Err((field::FULL_SCALE, "Vollausschlag muss zwischen 1 und 50 A liegen."));
         }
         if !ok(self.imbalance_a, 0.1, 50.0) {
-            return Err((3, "Schieflast-Grenze muss zwischen 0,1 und 50 A liegen."));
+            return Err((field::IMB_A, "Schieflast-Grenze muss zwischen 0,1 und 50 A liegen."));
+        }
+        if !ok(self.imbalance_pct, 1.0, 500.0) {
+            return Err((field::IMB_PCT, "Schieflast-Grenze muss zwischen 1 und 500 % liegen."));
+        }
+        if !ok(self.imbalance_min_load_a, 0.0, 300.0) {
+            return Err((field::IMB_MIN_LOAD, "Mindestlast muss zwischen 0 und 300 A liegen."));
         }
         if !ok(self.connector_rated_w, 50.0, 2000.0) {
-            return Err((4, "Nennleistung muss zwischen 50 und 2000 W liegen."));
+            return Err((field::RATED_W, "Nennleistung muss zwischen 50 und 2000 W liegen."));
         }
         Ok(())
     }
@@ -307,7 +406,7 @@ impl Monitor {
                     if st.present && st.max_a >= lim.pin_limit_a {
                         active[Fault::OverCurrent as usize] = true;
                     }
-                    if st.active() && st.imbalance_a >= lim.imbalance_a {
+                    if lim.imbalance_level(&st) == 2 {
                         active[Fault::Imbalance as usize] = true;
                     }
                 }
@@ -496,11 +595,38 @@ mod tests {
     }
 
     #[test]
+    fn imbalance_percent_mode() {
+        let mut cfg = Config::default();
+        cfg.limits.imbalance_mode = ImbalanceMode::Percent;
+        // Mittel 6 A, Pin 1 mit 8 A -> 33 % Abweichung, Δ nur 2,4 A
+        let s = snap([8.0, 5.6, 5.6, 5.6, 5.6, 5.6], [0.0; 6]);
+        let st = ConnectorStats::from_snapshot(&s, 0);
+        assert!(st.sum_a >= 20.0 && st.deviation_pct > 30.0);
+        let mut m = Monitor::default();
+        m.update(Some(&s), &cfg);
+        assert!(m.fault(Fault::Imbalance).active);
+        // gleiche Lage im Ampere-Modus: kein Alarm
+        let mut m2 = Monitor::default();
+        m2.update(Some(&s), &Config::default());
+        assert!(!m2.fault(Fault::Imbalance).active);
+        // unter Mindestlast (Σ 9,6 A) wird nicht bewertet, obwohl ein Pin fehlt
+        let low = snap([2.0, 0.0, 1.9, 1.9, 1.9, 1.9], [0.0; 6]);
+        let mut m3 = Monitor::default();
+        m3.update(Some(&low), &cfg);
+        assert!(!m3.fault(Fault::Imbalance).active);
+        assert_eq!(cfg.limits.imbalance_level(&ConnectorStats::from_snapshot(&low, 0)), 0);
+        // mit Mindestlast 5 A schon
+        cfg.limits.imbalance_min_load_a = 5.0;
+        m3.update(Some(&low), &cfg);
+        assert!(m3.fault(Fault::Imbalance).active);
+    }
+
+    #[test]
     fn validate_limits() {
         assert!(Limits::default().validate().is_ok());
         let l = Limits { pin_warn_a: 9.5, ..Limits::default() };
         assert_eq!(l.validate().unwrap_err().0, 0);
         let l = Limits { connector_rated_w: 10.0, ..Limits::default() };
-        assert_eq!(l.validate().unwrap_err().0, 4);
+        assert_eq!(l.validate().unwrap_err().0, field::RATED_W);
     }
 }

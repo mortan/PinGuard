@@ -3,7 +3,7 @@
 //! werden in `WM_INITDIALOG` in Dialogeinheiten angelegt. Dadurch gibt es
 //! Tab-Navigation, Enter/Esc und DPI-Skalierung ohne Ressourcendatei.
 
-use crate::model::{AlarmCfg, Config, Limits, FAULTS, FAULT_COUNT};
+use crate::model::{field, AlarmCfg, Config, ImbalanceMode, Limits, FAULTS, FAULT_COUNT};
 use crate::settings::parse_num;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
@@ -26,20 +26,34 @@ const DS_FIXEDSYS: u32 = 0x8;
 const DS_CENTER: u32 = 0x800;
 const EM_SETSEL: u32 = 0xB1;
 
-const ID_LIMIT0: i32 = 100; // 5 Eingabefelder
+const CBS_DROPDOWNLIST: u32 = 0x3;
+const CB_ADDSTRING: u32 = 0x143;
+const CB_GETCURSEL: u32 = 0x147;
+const CB_SETCURSEL: u32 = 0x14E;
+const CBN_SELCHANGE: u32 = 1;
+
+const ID_LIMIT0: i32 = 100; // Eingabefelder in `field`-Reihenfolge
 const ID_ALARM0: i32 = 200; // je Fehlerart 4 Kästchen
 const ID_DEFAULTS: i32 = 300;
+const ID_IMB_MODE: i32 = 310;
 
 const DLG_W: i16 = 262;
-const DLG_H: i16 = 246;
+const DLG_H: i16 = 293;
 
-const LIMIT_ROWS: [(&str, &str); 5] = [
-    ("Pin gelb ab", "A"),
-    ("Pin rot / Überstrom ab", "A"),
-    ("Balken-Vollausschlag", "A"),
-    ("Schieflast (max − min) ab", "A"),
-    ("Nennleistung je Stecker", "W"),
+/// Zeilen der Gruppe "Grenzwerte": Beschriftung, Einheit, Feldindex
+/// (`None` = Auswahl der Schieflast-Messart).
+const LIMIT_ROWS: [(&str, &str, Option<usize>); 8] = [
+    ("Pin gelb ab", "A", Some(field::PIN_WARN)),
+    ("Pin rot / Überstrom ab", "A", Some(field::PIN_LIMIT)),
+    ("Balken-Vollausschlag", "A", Some(field::FULL_SCALE)),
+    ("Schieflast messen als", "", None),
+    ("Schieflast (max − min) ab", "A", Some(field::IMB_A)),
+    ("Schieflast (Abw. vom Mittel) ab", "%", Some(field::IMB_PCT)),
+    ("  … erst ab Steckerstrom (Σ)", "A", Some(field::IMB_MIN_LOAD)),
+    ("Nennleistung je Stecker", "W", Some(field::RATED_W)),
 ];
+const MODE_NAMES: [&str; 2] = ["Ampere", "Prozent"];
+const MODES: [ImbalanceMode; 2] = [ImbalanceMode::Amps, ImbalanceMode::Percent];
 const ALARM_COLS: [&str; 4] = ["Aktiv", "Halten", "Ton", "Zeigen"];
 const COL_X: [i32; 4] = [130, 160, 190, 220];
 
@@ -54,8 +68,8 @@ fn fmt_num(v: f32) -> String {
     s.replace('.', ",")
 }
 
-fn limit_vals(l: &Limits) -> [f32; 5] {
-    [l.pin_warn_a, l.pin_limit_a, l.full_scale_a, l.imbalance_a, l.connector_rated_w]
+fn limit_vals(l: &Limits) -> [f32; field::COUNT] {
+    [l.pin_warn_a, l.pin_limit_a, l.full_scale_a, l.imbalance_a, l.imbalance_pct, l.imbalance_min_load_a, l.connector_rated_w]
 }
 
 fn alarm_bits(a: &AlarmCfg) -> [bool; 4] {
@@ -135,6 +149,8 @@ unsafe fn fill(dlg: HWND, cfg: &Config) {
     for (i, v) in limit_vals(&cfg.limits).iter().enumerate() {
         set_text(dlg, ID_LIMIT0 + i as i32, &fmt_num(*v));
     }
+    let mode = MODES.iter().position(|m| *m == cfg.limits.imbalance_mode).unwrap_or(0);
+    SendDlgItemMessageW(dlg, ID_IMB_MODE, CB_SETCURSEL, WPARAM(mode), LPARAM(0));
     for (fi, a) in cfg.alarms.iter().enumerate() {
         for (ci, on) in alarm_bits(a).iter().enumerate() {
             set_check(dlg, ID_ALARM0 + (fi * 4 + ci) as i32, *on);
@@ -143,21 +159,35 @@ unsafe fn fill(dlg: HWND, cfg: &Config) {
     update_enabled(dlg);
 }
 
-/// Halten/Ton/Zeigen nur bedienbar, wenn der Alarm aktiv ist.
+unsafe fn get_mode(dlg: HWND) -> ImbalanceMode {
+    let i = SendDlgItemMessageW(dlg, ID_IMB_MODE, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0;
+    MODES.get(i as usize).copied().unwrap_or_default()
+}
+
+unsafe fn enable(dlg: HWND, id: i32, on: bool) {
+    if let Ok(h) = GetDlgItem(dlg, id) {
+        let _ = windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow(h, on);
+    }
+}
+
+/// Halten/Ton/Zeigen nur bedienbar, wenn der Alarm aktiv ist; von den
+/// Schieflast-Feldern nur die der gewählten Messart.
 unsafe fn update_enabled(dlg: HWND) {
     for fi in 0..FAULT_COUNT {
         let on = get_check(dlg, ID_ALARM0 + (fi * 4) as i32);
         for ci in 1..4 {
-            if let Ok(h) = GetDlgItem(dlg, ID_ALARM0 + (fi * 4 + ci) as i32) {
-                let _ = windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow(h, on);
-            }
+            enable(dlg, ID_ALARM0 + (fi * 4 + ci) as i32, on);
         }
     }
+    let pct = get_mode(dlg) == ImbalanceMode::Percent;
+    enable(dlg, ID_LIMIT0 + field::IMB_A as i32, !pct);
+    enable(dlg, ID_LIMIT0 + field::IMB_PCT as i32, pct);
+    enable(dlg, ID_LIMIT0 + field::IMB_MIN_LOAD as i32, pct);
 }
 
 /// Liest den Dialog aus. Bei ungültigen Werten: Meldung, Fokus auf das Feld.
 unsafe fn read(dlg: HWND) -> Option<Config> {
-    let mut vals = [0f32; 5];
+    let mut vals = [0f32; field::COUNT];
     for (i, v) in vals.iter_mut().enumerate() {
         let id = ID_LIMIT0 + i as i32;
         match parse_num(&get_text(dlg, id)) {
@@ -168,7 +198,16 @@ unsafe fn read(dlg: HWND) -> Option<Config> {
             }
         }
     }
-    let limits = Limits { pin_warn_a: vals[0], pin_limit_a: vals[1], full_scale_a: vals[2], imbalance_a: vals[3], connector_rated_w: vals[4] };
+    let limits = Limits {
+        pin_warn_a: vals[field::PIN_WARN],
+        pin_limit_a: vals[field::PIN_LIMIT],
+        full_scale_a: vals[field::FULL_SCALE],
+        imbalance_mode: get_mode(dlg),
+        imbalance_a: vals[field::IMB_A],
+        imbalance_pct: vals[field::IMB_PCT],
+        imbalance_min_load_a: vals[field::IMB_MIN_LOAD],
+        connector_rated_w: vals[field::RATED_W],
+    };
     if let Err((field, msg)) = limits.validate() {
         error(dlg, ID_LIMIT0 + field as i32, msg);
         return None;
@@ -196,16 +235,30 @@ unsafe fn init(dlg: HWND, ctx: &Ctx) {
     let bt = w!("BUTTON");
 
     // Grenzwerte
-    ctl(dlg, f, bt, "Grenzwerte", BS_GROUPBOX, 7, 5, DLG_W as i32 - 14, 92, -1);
-    for (i, (label, unit)) in LIMIT_ROWS.iter().enumerate() {
+    let rows = LIMIT_ROWS.len() as i32;
+    ctl(dlg, f, bt, "Grenzwerte", BS_GROUPBOX, 7, 5, DLG_W as i32 - 14, 17 + rows * 15, -1);
+    for (i, (label, unit, fld)) in LIMIT_ROWS.iter().enumerate() {
         let y = 19 + i as i32 * 15;
         ctl(dlg, f, st, label, SS_LEFT, 15, y + 2, 140, 9, -1);
-        ctl(dlg, f, w!("EDIT"), "", ES_AUTOHSCROLL | WS_TABSTOP.0 | if i == 0 { WS_GROUP.0 } else { 0 }, 160, y, 44, 12, ID_LIMIT0 + i as i32);
-        ctl(dlg, f, st, unit, SS_LEFT, 209, y + 2, 20, 9, -1);
+        match fld {
+            Some(fi) => {
+                let style = ES_AUTOHSCROLL | WS_TABSTOP.0 | if i == 0 { WS_GROUP.0 } else { 0 };
+                ctl(dlg, f, w!("EDIT"), "", style, 160, y, 44, 12, ID_LIMIT0 + *fi as i32);
+                ctl(dlg, f, st, unit, SS_LEFT, 209, y + 2, 20, 9, -1);
+            }
+            None => {
+                // Höhe inkl. aufgeklappter Liste
+                let cb = ctl(dlg, f, w!("COMBOBOX"), "", CBS_DROPDOWNLIST | WS_VSCROLL.0 | WS_TABSTOP.0, 160, y, 88, 60, ID_IMB_MODE);
+                for name in MODE_NAMES {
+                    let t = wide(name);
+                    SendMessageW(cb, CB_ADDSTRING, WPARAM(0), LPARAM(t.as_ptr() as isize));
+                }
+            }
+        }
     }
 
     // Alarme
-    let gy = 103;
+    let gy = 13 + 17 + rows * 15;
     ctl(dlg, f, bt, "Alarme", BS_GROUPBOX, 7, gy, DLG_W as i32 - 14, 114, -1);
     for (ci, name) in ALARM_COLS.iter().enumerate() {
         ctl(dlg, f, st, name, SS_CENTER, COL_X[ci] - 8, gy + 12, 26, 9, -1);
@@ -267,6 +320,7 @@ unsafe extern "system" fn dlg_proc(dlg: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 }
                 ID_DEFAULTS => fill(dlg, &Config::default()),
                 x if (ID_ALARM0..ID_ALARM0 + 4 * FAULT_COUNT as i32).contains(&x) && (x - ID_ALARM0) % 4 == 0 => update_enabled(dlg),
+                ID_IMB_MODE if (wp.0 >> 16) as u32 == CBN_SELCHANGE => update_enabled(dlg),
                 _ => return 0,
             }
             1

@@ -445,10 +445,10 @@ impl Painter<'_> {
     fn draw_metrics(&self, lim: &Limits, snap: Option<&PsuSnapshot>, stats: Option<&[ConnectorStats; 2]>, vis: &[usize]) {
         let g = |i: usize| snap.and_then(|s| s.get(i));
         // Summen über die angezeigten Stecker
-        let sel: Option<(f32, f32, f32, usize, usize, f32)> = stats.map(|s| {
+        let sel: Option<(f32, f32, f32, usize, usize, f32, u8)> = stats.map(|s| {
             let mut w = 0.0;
             let mut a = 0.0;
-            let (mut mx, mut mxc, mut mxp, mut imb) = (0.0f32, 0, 0, 0.0f32);
+            let (mut mx, mut mxc, mut mxp, mut imb, mut imb_lvl) = (0.0f32, 0, 0, 0.0f32, 0u8);
             for &c in vis {
                 w += s[c].watts;
                 a += s[c].sum_a;
@@ -457,9 +457,10 @@ impl Painter<'_> {
                     mxc = c;
                     mxp = s[c].max_pin;
                 }
-                imb = imb.max(s[c].imbalance_a);
+                imb = imb.max(lim.imbalance_value(&s[c]));
+                imb_lvl = imb_lvl.max(lim.imbalance_level(&s[c]));
             }
-            (w, a, mx, mxc, mxp, imb)
+            (w, a, mx, mxc, mxp, imb, imb_lvl)
         });
         let present = stats.map(|s| vis.iter().any(|&c| s[c].present)).unwrap_or(false);
         let sel = sel.filter(|_| present);
@@ -475,20 +476,25 @@ impl Painter<'_> {
         self.cell(1, 0, "Auslast.", &opt(load, 0, "%"), load_col);
         self.cell(0, 1, "Σ Strom", &opt(sel.map(|s| s.1), 1, "A"), TEXT);
         let (max_txt, max_col) = match sel {
-            Some((_, _, mx, c, p, _)) => {
+            Some((_, _, mx, c, p, _, _)) => {
                 let pin = if vis.len() == 2 { format!("{}.{}", c + 1, p + 1) } else { format!("P{}", p + 1) };
                 (format!("{} A {}", de(mx, 1), pin), level_color(lim, mx))
             }
             None => ("–".into(), TEXT),
         };
         self.cell(1, 1, "Max", &max_txt, max_col);
-        let imb = sel.map(|s| s.5);
-        let imb_col = match imb {
-            Some(d) if d >= lim.imbalance_a => RED,
-            Some(d) if d >= lim.imbalance_a * 0.5 => YELLOW,
+        // Schieflast in der gewählten Messart; Farbe wie die Alarmbewertung
+        // (bei Prozent erst ab Mindestlast).
+        let imb_col = match sel.map(|s| s.6) {
+            Some(2) => RED,
+            Some(1) => YELLOW,
             _ => TEXT,
         };
-        self.cell(0, 2, "Δ Pins", &opt(imb, 2, "A"), imb_col);
+        let (imb_label, imb_txt) = match lim.imbalance_mode {
+            ImbalanceMode::Amps => ("Δ Pins", opt(sel.map(|s| s.5), 2, "A")),
+            ImbalanceMode::Percent => ("Abw.", opt(sel.map(|s| s.5), 0, "%")),
+        };
+        self.cell(0, 2, imb_label, &imb_txt, imb_col);
         self.cell(1, 2, "GPU", &opt(g(idx::GPU_W), 0, "W"), TEXT);
         self.cell(0, 3, "PSU DC", &opt(g(idx::PSU_W), 0, "W"), TEXT);
         self.cell(1, 3, "Effizienz", &opt(g(idx::EFF), 1, "%"), TEXT);

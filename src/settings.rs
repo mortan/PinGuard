@@ -1,11 +1,12 @@
 //! Fensterposition/-größe, "immer im Vordergrund", Grenzwerte und Alarme in
 //! `%APPDATA%\GpuMon\gpumon.ini` (einfaches key=value).
 //!
-//! Grenzwerte: `pin_warn`, `pin_limit`, `full_scale`, `imbalance` (A) und
-//! `rated_w` (W). Alarme: je Fehlerart `<key>_on`, `<key>_latch`,
+//! Grenzwerte: `pin_warn`, `pin_limit`, `full_scale` (A), `rated_w` (W),
+//! Schieflast `imbalance_mode` (amps/percent), `imbalance` (A),
+//! `imbalance_pct` (%), `imbalance_min_load` (A). Alarme: je Fehlerart `<key>_on`, `<key>_latch`,
 //! `<key>_sound`, `<key>_show` (0/1), mit `<key>` aus `Fault::key`.
 
-use crate::model::{Config, FAULTS};
+use crate::model::{Config, ImbalanceMode, FAULTS};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -49,6 +50,13 @@ impl Settings {
                 "pin_limit" => num(&mut lim.pin_limit_a),
                 "full_scale" => num(&mut lim.full_scale_a),
                 "imbalance" => num(&mut lim.imbalance_a),
+                "imbalance_mode" => {
+                    if let Some(m) = ImbalanceMode::from_key(v) {
+                        lim.imbalance_mode = m;
+                    }
+                }
+                "imbalance_pct" => num(&mut lim.imbalance_pct),
+                "imbalance_min_load" => num(&mut lim.imbalance_min_load_a),
                 "rated_w" => num(&mut lim.connector_rated_w),
                 _ => {
                     let Some((fk, attr)) = k.rsplit_once('_') else { continue };
@@ -86,8 +94,17 @@ impl Settings {
         let l = &self.config.limits;
         out += "\n# Grenzwerte (A bzw. W)\n";
         out += &format!(
-            "pin_warn={}\npin_limit={}\nfull_scale={}\nimbalance={}\nrated_w={}\n",
-            l.pin_warn_a, l.pin_limit_a, l.full_scale_a, l.imbalance_a, l.connector_rated_w
+            "pin_warn={}\npin_limit={}\nfull_scale={}\nrated_w={}\n",
+            l.pin_warn_a, l.pin_limit_a, l.full_scale_a, l.connector_rated_w
+        );
+        out += "# Schieflast: amps = max − min in A (imbalance), percent = Abweichung vom Mittel in %\n";
+        out += "# (imbalance_pct), bewertet erst ab imbalance_min_load A Steckerstrom\n";
+        out += &format!(
+            "imbalance_mode={}\nimbalance={}\nimbalance_pct={}\nimbalance_min_load={}\n",
+            l.imbalance_mode.key(),
+            l.imbalance_a,
+            l.imbalance_pct,
+            l.imbalance_min_load_a
         );
         out += "\n# Alarme: on = auswerten, latch = halten bis Klick, sound = Warnton, show = Fenster nach vorne\n";
         for f in FAULTS {
@@ -118,12 +135,21 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{AlarmCfg, Fault, Limits};
+    use crate::model::{AlarmCfg, Fault, ImbalanceMode, Limits};
 
     #[test]
     fn roundtrip() {
         let mut s = Settings { rect: Some((-1700, 120, 660, 294)), topmost: true, config: Config::default() };
-        s.config.limits = Limits { pin_warn_a: 7.5, pin_limit_a: 8.8, full_scale_a: 10.0, imbalance_a: 4.25, connector_rated_w: 450.0 };
+        s.config.limits = Limits {
+            pin_warn_a: 7.5,
+            pin_limit_a: 8.8,
+            full_scale_a: 10.0,
+            imbalance_mode: ImbalanceMode::Percent,
+            imbalance_a: 4.25,
+            imbalance_pct: 25.0,
+            imbalance_min_load_a: 12.5,
+            connector_rated_w: 450.0,
+        };
         s.config.alarms[Fault::Imbalance as usize] = AlarmCfg { enabled: true, latch: false, sound: true, show: true };
         s.config.alarms[Fault::NoData as usize].enabled = false;
         assert_eq!(Settings::parse(&s.serialize()), s);

@@ -14,9 +14,9 @@ Mock-Modus mit Schieflast, Alarm und gelatchtem Überstrom: [docs/screenshot-moc
 | Bereich | Inhalt |
 |---|---|
 | Balken links | 6 Pins des aktiven Steckers. Ampel (Standard, einstellbar): grün < 8 A, gelb 8–9,2 A, rot ≥ 9,2 A. Vollausschlag 12 A, rote Linie an der Rot-Grenze, gelbe Linie an der Gelb-Grenze, Strich = Peak seit Start/Reset. Stecker 2 erscheint nur, wenn er Strom führt. |
-| Kennzahlen rechts | Stecker-Leistung (Σ Pins × gemessene 12 V), Auslastung (bezogen auf 600 W), Σ Strom, Max-Pin, Δ Pins (max − min), GPU-Board-Power (Afterburner `Power`), PSU DC, Effizienz, Temperatur, Lüfter |
+| Kennzahlen rechts | Stecker-Leistung (Σ Pins × gemessene 12 V), Auslastung (bezogen auf 600 W), Σ Strom, Max-Pin, Schieflast (Δ Pins in A oder Abw. in %, je nach Messart), GPU-Board-Power (Afterburner `Power`), PSU DC, Effizienz, Temperatur, Lüfter |
 | Rails | 12 V / 5 V / 3,3 V: Spannung und Strom |
-| Statuszeile | ALARM S1/S2 (Alarm-Flag, das das Netzteil selbst je Stecker meldet), ÜBERSTROM (Pin ≥ Rot-Grenze), SCHIEFLAST (Δ ≥ Schieflast-Grenze, Standard 5,5 A = `CurrentDif` des MSI-Plugins), VERBINDUNG. **Rot** = aktiv, **orange umrandet** = war aktiv (gelatcht), blass = abgeschaltet. ALARM S2 erscheint erst, wenn Stecker 2 seit dem Start Strom geführt hat oder sein Alarm auslöst. |
+| Statuszeile | ALARM S1/S2 (Alarm-Flag, das das Netzteil selbst je Stecker meldet), ÜBERSTROM (Pin ≥ Rot-Grenze), SCHIEFLAST (Grenze in A oder %, siehe unten; Standard 3 A), VERBINDUNG. **Rot** = aktiv, **orange umrandet** = war aktiv (gelatcht), blass = abgeschaltet. ALARM S2 erscheint erst, wenn Stecker 2 seit dem Start Strom geführt hat oder sein Alarm auslöst. |
 
 Bedienung:
 - Fenster an beliebiger Stelle ziehen. Größe an den Rändern ändern, das Seitenverhältnis bleibt dabei erhalten.
@@ -35,8 +35,20 @@ Bedienung:
 | Pin gelb ab | 8 A | `pin_warn` |
 | Pin rot / Überstrom ab | 9,2 A | `pin_limit` |
 | Balken-Vollausschlag | 12 A | `full_scale` |
-| Schieflast (max − min) ab | 5,5 A | `imbalance` |
+| Schieflast messen als | Ampere | `imbalance_mode` (`amps` / `percent`) |
+| Schieflast (max − min) ab, Modus Ampere | 3 A | `imbalance` |
+| Schieflast (größte Abweichung eines Pins vom Mittelwert) ab, Modus Prozent | 30 % | `imbalance_pct` |
+| … Prozent-Modus erst ab Steckerstrom (Σ 6 Pins) | 20 A | `imbalance_min_load` |
 | Nennleistung je Stecker (Bezug für die Auslastung) | 600 W | `rated_w` |
+
+**Schieflast-Messart:** *Ampere* vergleicht den stärksten mit dem schwächsten Pin (wie `CurrentDif`
+im MSI-Plugin). MSI verwendet dort 5,5 A. Bei ~8,3 A pro Pin unter Volllast und 9,2 A Pin-Limit
+schlägt das erst sehr spät an, daher ist der Standard hier 3 A (gelb ab 1,5 A). Das ist bei hoher Last aussagekräftig, übersieht aber bei wenig Last sogar einen
+ausgefallenen Pin. *Prozent* bewertet die Abweichung vom Mittelwert und skaliert so mit der Last. Unterhalb der
+Mindestlast wird nicht bewertet, weil dort schon Messrauschen große Prozentwerte ergibt (ähnlich
+WireView Pro II: „Imbalance Limit (%)“ plus „Imbalance Current Limit (A)“). Ein ausgefallener Pin
+entspricht 100 % Abweichung. Die Kennzahl links heißt je nach Modus „Δ Pins“ (A) oder „Abw.“ (%).
+Sie wird ab der halben Grenze gelb und ab der Grenze rot.
 
 Je Alarm (`alarm1`, `alarm2`, `overcurrent`, `imbalance`, `nodata`) gibt es vier Schalter:
 **Aktiv** (`<alarm>_on`: auswerten und anzeigen), **Halten** (`_latch`: bleibt orange markiert bis zum Klick auf die Statuszeile),
