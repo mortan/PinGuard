@@ -1,7 +1,7 @@
-//! GpuMon – kompakter 12V-2x6-/PSU-Monitor für das MSI MPG Ai1300TS.
+//! PinGuard – kompakter 12V-2x6-/PSU-Monitor für das MSI MPG Ai1300TS.
 //!
 //! Win32-Fenster ohne Rahmen, GDI/GDI+-Zeichnen nur bei neuen Daten.
-//! Aufruf: `gpumon.exe [--mock] [--topmost]`
+//! Aufruf: `pinguard.exe [--mock] [--topmost]`
 //!   --mock     Fake-Daten statt Afterburner (--mock2: beide Stecker belegt)
 //!   --topmost  immer im Vordergrund (wird auch über das Kontextmenü gemerkt)
 
@@ -55,7 +55,7 @@ const CMD_LOG_RECORD: usize = 10;
 const CMD_LOG_OPEN: usize = 11;
 const CMD_TRAY: usize = 12;
 const CMD_AUTOSTART: usize = 13;
-const CLASS: PCWSTR = w!("GpuMonWindow");
+const CLASS: PCWSTR = w!("PinGuardWindow");
 
 struct App {
     source: Box<dyn PsuSource>,
@@ -707,7 +707,7 @@ fn main() -> Result<()> {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
         // Nur eine Instanz: vorhandenes Fenster nach vorne holen.
-        let _mutex = CreateMutexW(None, true, w!("Local\\GpuMon_SingleInstance"))?;
+        let _mutex = CreateMutexW(None, true, w!("Local\\PinGuard_SingleInstance"))?;
         if GetLastError() == ERROR_ALREADY_EXISTS {
             if let Ok(h) = FindWindowW(CLASS, None) {
                 let _ = ShowWindow(h, SW_RESTORE);
@@ -751,7 +751,7 @@ fn main() -> Result<()> {
         let hwnd = CreateWindowExW(
             ex,
             CLASS,
-            w!("GpuMon"),
+            w!("PinGuard"),
             WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_SYSMENU,
             x,
             y,

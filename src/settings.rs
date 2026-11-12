@@ -1,5 +1,5 @@
 //! Fensterposition/-größe, "immer im Vordergrund", Grenzwerte und Alarme in
-//! `%APPDATA%\GpuMon\gpumon.ini` (einfaches key=value).
+//! `%APPDATA%\PinGuard\pinguard.ini` (einfaches key=value).
 //!
 //! Grenzwerte: `pin_warn`, `pin_limit`, `full_scale` (A), `rated_w` (W),
 //! Schieflast `imbalance_mode` (amps/percent), `imbalance` (A),
@@ -38,7 +38,7 @@ impl Default for Settings {
 
 fn path() -> Option<PathBuf> {
     let base = std::env::var_os("APPDATA")?;
-    Some(PathBuf::from(base).join("GpuMon").join("gpumon.ini"))
+    Some(PathBuf::from(base).join("PinGuard").join("pinguard.ini"))
 }
 
 /// Zahl mit Punkt oder Komma.
@@ -117,7 +117,7 @@ impl Settings {
     }
 
     pub fn serialize(&self) -> String {
-        let mut out = String::from("# GpuMon\n");
+        let mut out = String::from("# PinGuard\n");
         if let Some((x, y, w, h)) = self.rect {
             out += &format!("x={x}\ny={y}\nw={w}\nh={h}\n");
         }
@@ -160,7 +160,10 @@ impl Settings {
     }
 
     pub fn load() -> Settings {
-        path().and_then(|p| std::fs::read_to_string(p).ok()).map(|t| Settings::parse(&t)).unwrap_or_default()
+        path()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|t| Settings::parse(&t))
+            .unwrap_or_default()
     }
 
     pub fn save(&self) {

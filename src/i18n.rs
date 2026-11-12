@@ -249,7 +249,7 @@ static DE: Texts = Texts {
     tip_temp: "Temperatur im Netzteil",
     tip_fan: "Drehzahl des Netzteillüfters\n0 rpm: Lüfter steht",
 
-    dlg_title: "GpuMon – Einstellungen",
+    dlg_title: "PinGuard – Einstellungen",
     grp_limits: "Grenzwerte",
     grp_alarms: "Alarme",
     grp_display: "Anzeige",
@@ -348,7 +348,7 @@ static EN: Texts = Texts {
     tip_temp: "Temperature inside the PSU",
     tip_fan: "PSU fan speed\n0 rpm: fan stopped",
 
-    dlg_title: "GpuMon – Settings",
+    dlg_title: "PinGuard – Settings",
     grp_limits: "Limits",
     grp_alarms: "Alarms",
     grp_display: "Display",

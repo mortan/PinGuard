@@ -1,8 +1,8 @@
 [package]
-name = "gpumon"
-version = "0.1.0"
+name = "pinguard"
+version = "1.0.0"
 edition = "2021"
-description = "Kompakter 12V-2x6-/PSU-Monitor (MSI MPG Ai1300TS über MSI Afterburner Shared Memory)"
+description = "Compact 12V-2x6/PSU monitor (MSI MPG Ai1300TS via MSI Afterburner shared memory)"
 license = "MIT"
 
 [dependencies.windows]

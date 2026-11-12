@@ -1,5 +1,5 @@
 //! Ereignis-Log: bei jedem neu auftretenden Alarm eine Zeile in
-//! `%APPDATA%\GpuMon\events.csv`. Trennzeichen Semikolon, Dezimalpunkt,
+//! `%APPDATA%\PinGuard\events.csv`. Trennzeichen Semikolon, Dezimalpunkt,
 //! unabhängig von der Sprache der Oberfläche, damit die Datei
 //! maschinenlesbar bleibt. Schreibfehler werden still ignoriert.
 //!
@@ -15,9 +15,9 @@ pub const FILE_NAME: &str = "events.csv";
 pub const OLD_NAME: &str = "events.old.csv";
 pub const MAX_BYTES: u64 = 1_000_000;
 
-/// Ordner der Einstellungen und des Logs (`%APPDATA%\GpuMon`).
+/// Ordner der Einstellungen und des Logs (`%APPDATA%\PinGuard`).
 pub fn dir() -> Option<PathBuf> {
-    Some(PathBuf::from(std::env::var_os("APPDATA")?).join("GpuMon"))
+    Some(PathBuf::from(std::env::var_os("APPDATA")?).join("PinGuard"))
 }
 
 /// Kopfzeile: Zeit, Alarm, 12 Pin-Ströme, 12-V-Spannung, Steckerleistung.
@@ -76,7 +76,7 @@ pub fn append(path: &Path, lines: &[String], max: u64) -> std::io::Result<()> {
     f.write_all(out.as_bytes())
 }
 
-/// Schreibt die Zeilen ins Log unter `%APPDATA%\GpuMon`; Fehler still.
+/// Schreibt die Zeilen ins Log unter `%APPDATA%\PinGuard`; Fehler still.
 pub fn log(lines: &[String]) {
     if let Some(d) = dir() {
         let _ = append(&d.join(FILE_NAME), lines, MAX_BYTES);
@@ -110,7 +110,7 @@ mod tests {
 
     #[test]
     fn append_creates_and_rotates() {
-        let dir = std::env::temp_dir().join(format!("gpumon-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pinguard-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let p = dir.join(FILE_NAME);
         append(&p, &["a".into()], 200).unwrap();

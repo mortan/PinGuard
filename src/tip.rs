@@ -13,7 +13,7 @@ use windows::Win32::Graphics::Dwm::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-const CLASS: PCWSTR = w!("GpuMonTip");
+const CLASS: PCWSTR = w!("PinGuardTip");
 // COLORREF (BGR)
 const BG: u32 = 0x00332B27;
 const FG: u32 = 0x00F0F0F0;

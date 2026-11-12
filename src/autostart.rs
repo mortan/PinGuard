@@ -1,5 +1,5 @@
 //! „Mit Windows starten“ über `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
-//! Wert `GpuMon` = Pfad der laufenden EXE in Anführungszeichen. Der Zustand
+//! Wert `PinGuard` = Pfad der laufenden EXE in Anführungszeichen. Der Zustand
 //! wird bei Bedarf aus der Registry gelesen und nicht in der INI gespeichert.
 //!
 //! Tests prüfen nur die reinen Funktionen (`command`, `matches`); die
@@ -11,7 +11,7 @@ use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::System::Registry::*;
 
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
-const VALUE: PCWSTR = w!("GpuMon");
+const VALUE: PCWSTR = w!("PinGuard");
 
 /// Kommandozeile für den Run-Schlüssel: Pfad in Anführungszeichen (Pfade mit
 /// Leerzeichen), ohne weitere Argumente.
@@ -27,7 +27,7 @@ pub fn matches(value: &str, exe: &Path) -> bool {
     v.eq_ignore_ascii_case(&exe.display().to_string())
 }
 
-/// Aktueller Wert `GpuMon` im Run-Schlüssel, falls vorhanden.
+/// Aktueller Wert `PinGuard` im Run-Schlüssel, falls vorhanden.
 fn read() -> Option<String> {
     unsafe {
         let mut buf = [0u16; 1024];
@@ -42,7 +42,7 @@ fn read() -> Option<String> {
     }
 }
 
-/// Startet GpuMon mit Windows (Eintrag zeigt auf die laufende EXE)?
+/// Startet PinGuard mit Windows (Eintrag zeigt auf die laufende EXE)?
 pub fn is_enabled() -> bool {
     match (read(), std::env::current_exe()) {
         (Some(v), Ok(exe)) => matches(&v, &exe),
@@ -71,12 +71,12 @@ mod tests {
 
     #[test]
     fn command_line() {
-        let exe = PathBuf::from(r"C:\Program Files\GpuMon\gpumon.exe");
-        assert_eq!(command(&exe), r#""C:\Program Files\GpuMon\gpumon.exe""#);
+        let exe = PathBuf::from(r"C:\Program Files\PinGuard\pinguard.exe");
+        assert_eq!(command(&exe), r#""C:\Program Files\PinGuard\pinguard.exe""#);
         assert!(matches(&command(&exe), &exe));
-        assert!(matches(r#""c:\program files\gpumon\GPUMON.EXE""#, &exe));
-        assert!(matches(r"C:\Program Files\GpuMon\gpumon.exe ", &exe));
-        assert!(!matches(r#""C:\Tools\gpumon.exe""#, &exe));
+        assert!(matches(r#""c:\program files\pinguard\PINGUARD.EXE""#, &exe));
+        assert!(matches(r"C:\Program Files\PinGuard\pinguard.exe ", &exe));
+        assert!(!matches(r#""C:\Tools\pinguard.exe""#, &exe));
         assert!(!matches("", &exe));
     }
 }

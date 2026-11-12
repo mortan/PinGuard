@@ -97,6 +97,8 @@ struct Ctx {
     font: HFONT,
 }
 
+/// Legt ein Steuerelement an; die Parameter entsprechen `CreateWindowExW`.
+#[allow(clippy::too_many_arguments)]
 unsafe fn ctl(dlg: HWND, font: HFONT, class: PCWSTR, text: &str, style: u32, x: i32, y: i32, cx: i32, cy: i32, id: i32) -> HWND {
     let mut r = RECT { left: x, top: y, right: x + cx, bottom: y + cy };
     let _ = MapDialogRect(dlg, &mut r);
@@ -278,9 +280,9 @@ unsafe fn init(dlg: HWND, ctx: &Ctx) {
     for (fi, fault) in FAULTS.iter().enumerate() {
         let y = gy + 24 + fi as i32 * 13;
         ctl(dlg, f, st, fault.title(), SS_LEFT, 15, y + 1, 110, 9, -1);
-        for ci in 0..4 {
+        for (ci, &x) in COL_X.iter().enumerate() {
             let id = ID_ALARM0 + (fi * 4 + ci) as i32;
-            ctl(dlg, f, bt, "", BS_AUTOCHECKBOX | WS_TABSTOP.0, COL_X[ci], y, 10, 10, id);
+            ctl(dlg, f, bt, "", BS_AUTOCHECKBOX | WS_TABSTOP.0, x, y, 10, 10, id);
         }
     }
     ctl(

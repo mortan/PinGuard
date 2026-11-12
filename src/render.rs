@@ -439,7 +439,7 @@ pub fn hint_at(x: f32, y: f32, v: &View) -> Option<Hint> {
 /// Tooltip des Tray-Symbols: Steckerleistung, höchster Pin und aktive
 /// Alarme (Kurzname wie in der Statuszeile).
 pub fn tray_tip(v: &View) -> String {
-    let mut s = String::from("GpuMon\n");
+    let mut s = String::from("PinGuard\n");
     match v.reading {
         Reading::Data(snap) => match summary(snap) {
             Some(sm) => {
@@ -1376,13 +1376,13 @@ mod tests {
         let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None };
         i18n::set_lang(i18n::Lang::De);
         // Σ 37,5 − 6,2 + 9,6 = 40,9 A × 12 V; Δ 3,6 A löst auch Schieflast aus
-        assert_eq!(tray_tip(&v), "GpuMon\nStecker 491 W · Max 9,6 A (P3)\nÜBERSTROM · SCHIEFLAST");
+        assert_eq!(tray_tip(&v), "PinGuard\nStecker 491 W · Max 9,6 A (P3)\nÜBERSTROM · SCHIEFLAST");
         i18n::set_lang(i18n::Lang::En);
-        assert_eq!(tray_tip(&v), "GpuMon\nConnector 491 W · max 9.6 A (P3)\nOVERCURRENT · IMBALANCE");
+        assert_eq!(tray_tip(&v), "PinGuard\nConnector 491 W · max 9.6 A (P3)\nOVERCURRENT · IMBALANCE");
         let off = Reading::Offline;
         let mon = Monitor::default();
         let v = View { reading: &off, monitor: &mon, config: &cfg, source_name: "Test", now_ms: 0, mean_legend: None };
-        assert_eq!(tray_tip(&v), "GpuMon\nTest not running");
+        assert_eq!(tray_tip(&v), "PinGuard\nTest not running");
         assert!(tray_tip(&v).encode_utf16().count() < 128);
     }
 
