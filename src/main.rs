@@ -448,6 +448,8 @@ unsafe fn show_menu(hwnd: HWND, app: &mut App, mut pt: POINT) {
         append(menu, MF_POPUP, sub.0 as usize, tx.menu_event_log);
     }
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+    // Versionszeile, nur zur Anzeige (aus Cargo.toml)
+    append(menu, MF_STRING | MF_GRAYED, 0, concat!("PinGuard ", env!("CARGO_PKG_VERSION")));
     append(menu, MF_STRING, CMD_EXIT, tx.menu_exit);
     let _ = SetForegroundWindow(hwnd);
     let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, None);
