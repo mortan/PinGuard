@@ -6,7 +6,10 @@
 //! `imbalance_pct` (%), `imbalance_min_load` (A). Alarme: je Fehlerart `<key>_on`, `<key>_latch`,
 //! `<key>_sound`, `<key>_show` (0/1), mit `<key>` aus `Fault::key`.
 //! Anzeige: `show_<key>` (0/1) mit `<key>` aus `Metric::key`.
+//! Sprache: `lang` = `auto` (nach Windows), `de` oder `en`; fehlt der
+//! Schlüssel (ältere INI), gilt `auto`.
 
+use crate::i18n::LangPref;
 use crate::model::{Config, ImbalanceMode, FAULTS, METRICS};
 use std::path::PathBuf;
 
@@ -15,6 +18,8 @@ pub struct Settings {
     /// Fensterrechteck in physischen Bildschirmpixeln (x, y, Breite, Höhe).
     pub rect: Option<(i32, i32, i32, i32)>,
     pub topmost: bool,
+    /// Gewählte Sprache der Oberfläche
+    pub lang: LangPref,
     pub config: Config,
 }
 
@@ -47,6 +52,11 @@ impl Settings {
                 "w" => w = v.parse().ok(),
                 "h" => h = v.parse().ok(),
                 "topmost" => s.topmost = v == "1",
+                "lang" => {
+                    if let Some(l) = LangPref::from_key(v) {
+                        s.lang = l;
+                    }
+                }
                 "pin_warn" => num(&mut lim.pin_warn_a),
                 "pin_limit" => num(&mut lim.pin_limit_a),
                 "full_scale" => num(&mut lim.full_scale_a),
@@ -97,6 +107,8 @@ impl Settings {
             out += &format!("x={x}\ny={y}\nw={w}\nh={h}\n");
         }
         out += &format!("topmost={}\n", self.topmost as u8);
+        out += "# Sprache: auto (nach Windows), de, en\n";
+        out += &format!("lang={}\n", self.lang.key());
         let l = &self.config.limits;
         out += "\n# Grenzwerte (A bzw. W)\n";
         out += &format!(
@@ -149,7 +161,7 @@ mod tests {
 
     #[test]
     fn roundtrip() {
-        let mut s = Settings { rect: Some((-1700, 120, 660, 294)), topmost: true, config: Config::default() };
+        let mut s = Settings { rect: Some((-1700, 120, 660, 294)), topmost: true, lang: LangPref::En, config: Config::default() };
         s.config.limits = Limits {
             pin_warn_a: 7.5,
             pin_limit_a: 8.8,
@@ -166,6 +178,10 @@ mod tests {
         s.config.show[Metric::Fan as usize] = false;
         assert_eq!(Settings::parse(&s.serialize()), s);
         assert_eq!(Settings::parse("garbage\nx=1"), Settings::default());
+        for l in [LangPref::Auto, LangPref::De, LangPref::En] {
+            let s = Settings { lang: l, ..Settings::default() };
+            assert_eq!(Settings::parse(&s.serialize()).lang, l);
+        }
     }
 
     #[test]
@@ -173,6 +189,10 @@ mod tests {
         // INI aus v1 ohne Grenzwerte → Standard
         let s = Settings::parse("x=1\ny=2\nw=600\nh=300\ntopmost=0\n");
         assert_eq!(s.config, Config::default());
+        // ohne `lang` → automatisch, unbekannter Wert ebenso
+        assert_eq!(s.lang, LangPref::Auto);
+        assert_eq!(Settings::parse("lang=fr").lang, LangPref::Auto);
+        assert_eq!(Settings::parse("lang = de").lang, LangPref::De);
         // Komma erlaubt
         assert_eq!(Settings::parse("pin_limit=9,5").config.limits.pin_limit_a, 9.5);
         // inkonsistent (gelb > rot) → Standard

@@ -1,6 +1,6 @@
 //! Datenmodell: Rohwerte (`PsuSnapshot`), abgeleitete Kennzahlen, Peaks und
 //! gelatchte Fehler. Enthält keine Windows-Abhängigkeiten und ist vollständig
-//! per Unit-Test prüfbar.
+//! per Unit-Test prüfbar. Sichtbare Texte kommen aus `i18n`.
 
 /// Konfigurierbare Grenzwerte. Die Standardwerte entsprechen den
 /// RTSS-Overlays bzw. der 12V-2x6-Spezifikation.
@@ -131,32 +131,34 @@ impl Limits {
         }
     }
 
-    /// Prüft die Werte; bei einem Fehler: (Feldindex aus `field`, Meldung).
+    /// Prüft die Werte; bei einem Fehler: (Feldindex aus `field`, Meldung
+    /// in der aktuellen Sprache).
     pub fn validate(&self) -> Result<(), (usize, &'static str)> {
         let ok = |v: f32, lo: f32, hi: f32| v.is_finite() && v >= lo && v <= hi;
+        let t = crate::i18n::t();
         if !ok(self.pin_warn_a, 0.1, 50.0) {
-            return Err((field::PIN_WARN, "Gelb-Grenze muss zwischen 0,1 und 50 A liegen."));
+            return Err((field::PIN_WARN, t.err_warn_range));
         }
         if !ok(self.pin_limit_a, 0.1, 50.0) {
-            return Err((field::PIN_LIMIT, "Rot-Grenze muss zwischen 0,1 und 50 A liegen."));
+            return Err((field::PIN_LIMIT, t.err_limit_range));
         }
         if self.pin_warn_a > self.pin_limit_a {
-            return Err((field::PIN_WARN, "Gelb-Grenze darf nicht über der Rot-Grenze liegen."));
+            return Err((field::PIN_WARN, t.err_warn_above));
         }
         if !ok(self.full_scale_a, 1.0, 50.0) {
-            return Err((field::FULL_SCALE, "Vollausschlag muss zwischen 1 und 50 A liegen."));
+            return Err((field::FULL_SCALE, t.err_full_scale));
         }
         if !ok(self.imbalance_a, 0.1, 50.0) {
-            return Err((field::IMB_A, "Schieflast-Grenze muss zwischen 0,1 und 50 A liegen."));
+            return Err((field::IMB_A, t.err_imb_a));
         }
         if !ok(self.imbalance_pct, 1.0, 500.0) {
-            return Err((field::IMB_PCT, "Schieflast-Grenze muss zwischen 1 und 500 % liegen."));
+            return Err((field::IMB_PCT, t.err_imb_pct));
         }
         if !ok(self.imbalance_min_load_a, 0.0, 300.0) {
-            return Err((field::IMB_MIN_LOAD, "Mindestlast muss zwischen 0 und 300 A liegen."));
+            return Err((field::IMB_MIN_LOAD, t.err_min_load));
         }
         if !ok(self.connector_rated_w, 50.0, 2000.0) {
-            return Err((field::RATED_W, "Nennleistung muss zwischen 50 und 2000 W liegen."));
+            return Err((field::RATED_W, t.err_rated_w));
         }
         Ok(())
     }
@@ -220,21 +222,9 @@ impl Metric {
     pub fn key(self) -> &'static str {
         ["conn_w", "sum_a", "max_pin", "imbalance", "load", "gpu_w", "psu_w", "eff", "temp", "fan", "rails"][self as usize]
     }
-    /// Beschriftung im Einstellungsdialog.
+    /// Beschriftung im Einstellungsdialog (aktuelle Sprache).
     pub fn title(self) -> &'static str {
-        [
-            "Leistung",
-            "Σ Strom",
-            "Höchster Pin",
-            "Schieflast",
-            "Auslastung",
-            "GPU-Leistung",
-            "Leistung (DC)",
-            "Effizienz",
-            "Temperatur",
-            "Lüfter",
-            "Spannungsschienen",
-        ][self as usize]
+        crate::i18n::t().metric_titles[self as usize]
     }
     /// Standard: alles außer Auslastung (hängt vom Power-Limit ab) und
     /// GPU-Leistung (die Steckerleistung ist das Entscheidende).
@@ -436,9 +426,9 @@ impl Fault {
     pub fn key(self) -> &'static str {
         ["alarm1", "alarm2", "overcurrent", "imbalance", "nodata"][self as usize]
     }
-    /// Beschriftung im Einstellungsdialog.
+    /// Beschriftung im Einstellungsdialog (aktuelle Sprache).
     pub fn title(self) -> &'static str {
-        ["Netzteil-Alarm Stecker 1", "Netzteil-Alarm Stecker 2", "Überstrom (Pin ≥ Rot)", "Schieflast", "Verbindung verloren"][self as usize]
+        crate::i18n::t().fault_titles[self as usize]
     }
 }
 

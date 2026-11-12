@@ -22,9 +22,19 @@ Bedienung:
 - Fenster an beliebiger Stelle ziehen. Größe an den Rändern ändern, das Seitenverhältnis bleibt dabei erhalten.
 - **Klick auf die Statuszeile:** gelatchte Fehler zurücksetzen
 - **Doppelklick:** Peaks zurücksetzen
-- **Rechtsklick:** Menü mit Peaks/Fehler zurücksetzen, *Grenzen und Alarme …*, *Immer im Vordergrund*, Beenden
-- Position, Größe, *Immer im Vordergrund*, Grenzwerte und Alarme werden in `%APPDATA%\GpuMon\gpumon.ini` gespeichert.
+- **Rechtsklick:** Menü mit Peaks/Fehler zurücksetzen, *Grenzen und Alarme …*, *Immer im Vordergrund*, *Sprache*, Beenden
+- Position, Größe, *Immer im Vordergrund*, Sprache, Grenzwerte und Alarme werden in `%APPDATA%\GpuMon\gpumon.ini` gespeichert.
 - Es läuft nur eine Instanz. Ein zweiter Start holt das vorhandene Fenster nach vorn.
+
+### Sprache
+
+Die Oberfläche gibt es auf Deutsch und Englisch. Standard ist *Automatisch*: Deutsch, wenn die
+Windows-Anzeigesprache Deutsch ist (alle Regionen), sonst Englisch. Über *Rechtsklick → Sprache*
+lässt sich *Automatisch (Windows)*, *Deutsch* oder *English* fest wählen; das wirkt sofort, ohne
+Neustart. INI-Schlüssel `lang` = `auto` / `de` / `en` (fehlt er, gilt `auto`). Zahlen erscheinen
+im Format der Sprache (Deutsch `9,2 A`, Englisch `9.2 A`). Im Einstellungsdialog werden Komma und
+Punkt immer akzeptiert. Englische Kurzformen: Statusfelder ALARM C1/C2, OVERCURR., IMBALANCE, LINK;
+Kennzahlen u. a. „Σ Amps“, „Dev.“, „Eff.“.
 
 ### Grenzen und Alarme
 
@@ -87,7 +97,7 @@ cargo build --release
 ```
 
 Das Ergebnis ist `target\release\gpumon.exe` (~190 KB, statisch gelinkt, ohne Runtime und ohne Konsolenfenster).
-Tests: `cargo test` (Modell, MAHM-Parsing gegen Byte-Puffer, Einstellungen).
+Tests: `cargo test` (Modell, MAHM-Parsing gegen Byte-Puffer, Einstellungen, Tooltips und Textbreiten je Sprache).
 
 ## Technik und Entscheidungen
 
@@ -114,7 +124,8 @@ Tests: `cargo test` (Modell, MAHM-Parsing gegen Byte-Puffer, Einstellungen).
 ```
 src/
   main.rs          Fenster, Message-Loop, Timer, DPI, Hit-Test, Menü
-  settings.rs      Position/Größe/Topmost, Grenzwerte, Alarme (INI)
+  i18n.rs          Texte Deutsch/Englisch, Zahlenformat, Sprachwahl
+  settings.rs      Position/Größe/Topmost, Sprache, Grenzwerte, Alarme (INI)
   settings_dlg.rs  Einstellungsdialog (Win32-Dialog aus Speichervorlage)
   model.rs         PsuSnapshot, Kennzahlen, Peaks, Fehler, Grenzwert-/Alarm-Konfiguration
   render.rs        Layout + Zeichnen (GDI+/GDI), Farben

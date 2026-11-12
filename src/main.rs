@@ -7,6 +7,7 @@
 
 #![windows_subsystem = "windows"]
 
+mod i18n;
 mod model;
 mod render;
 mod settings;
@@ -14,6 +15,7 @@ mod settings_dlg;
 mod source;
 mod tip;
 
+use i18n::{Lang, LangPref};
 use model::Monitor;
 use render::{Renderer, View};
 use settings::Settings;
@@ -23,6 +25,7 @@ use windows::core::{w, Result, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Dwm::*;
 use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::Globalization::GetUserDefaultUILanguage;
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::CreateMutexW;
@@ -36,11 +39,15 @@ const TIMER_TIP: usize = 2;
 const TIP_DELAY_MS: u32 = 450;
 // Werte aus WinUser.h
 const WM_NCMOUSELEAVE: u32 = 0x02A2;
-const WM_MOUSELEAVE: u32 = 0x02A3;const CMD_RESET_PEAKS: usize = 1;
+const WM_MOUSELEAVE: u32 = 0x02A3;
+const CMD_RESET_PEAKS: usize = 1;
 const CMD_RESET_FAULTS: usize = 2;
 const CMD_TOPMOST: usize = 3;
 const CMD_EXIT: usize = 4;
 const CMD_SETTINGS: usize = 5;
+/// Sprache: Auto, Deutsch, English (zusammenhängend, für `CheckMenuRadioItem`)
+const CMD_LANG0: usize = 6;
+const LANG_PREFS: [LangPref; 3] = [LangPref::Auto, LangPref::De, LangPref::En];
 const CLASS: PCWSTR = w!("GpuMonWindow");
 
 struct App {
@@ -236,20 +243,46 @@ fn in_status(app: &App, x: i32, y: i32) -> bool {
     (render::STATUS_X0..=render::STATUS_X1).contains(&bx) && (render::STATUS_Y0..=render::STATUS_Y1).contains(&by)
 }
 
+/// Sprache der Oberfläche nach Windows-Anzeigesprache.
+fn system_lang() -> Lang {
+    Lang::from_langid(unsafe { GetUserDefaultUILanguage() })
+}
+
+/// Stellt die Sprache der Oberfläche nach der Nutzerwahl ein.
+fn apply_lang(pref: LangPref) {
+    i18n::set_lang(pref.resolve(system_lang()));
+}
+
+unsafe fn append(menu: HMENU, flags: MENU_ITEM_FLAGS, id: usize, text: &str) {
+    let t: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let _ = AppendMenuW(menu, flags, id, PCWSTR(t.as_ptr()));
+}
+
 unsafe fn show_menu(hwnd: HWND, app: &mut App, mut pt: POINT) {
     app.tip_cancel(hwnd);
     if pt.x == -1 && pt.y == -1 {
         let _ = GetCursorPos(&mut pt);
     }
     let Ok(menu) = CreatePopupMenu() else { return };
-    let _ = AppendMenuW(menu, MF_STRING, CMD_RESET_PEAKS, w!("Peaks zurücksetzen\tDoppelklick"));
-    let _ = AppendMenuW(menu, MF_STRING, CMD_RESET_FAULTS, w!("Fehler zurücksetzen\tKlick auf Status"));
-    let _ = AppendMenuW(menu, MF_STRING, CMD_SETTINGS, w!("Grenzen und Alarme …"));
+    let tx = i18n::t();
+    append(menu, MF_STRING, CMD_RESET_PEAKS, tx.menu_reset_peaks);
+    append(menu, MF_STRING, CMD_RESET_FAULTS, tx.menu_reset_faults);
+    append(menu, MF_STRING, CMD_SETTINGS, tx.menu_settings);
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
     let top = if app.settings.topmost { MF_CHECKED } else { MF_UNCHECKED };
-    let _ = AppendMenuW(menu, MF_STRING | top, CMD_TOPMOST, w!("Immer im Vordergrund"));
+    append(menu, MF_STRING | top, CMD_TOPMOST, tx.menu_topmost);
+    // Untermenü Sprache; wird mit dem Hauptmenü zerstört.
+    if let Ok(sub) = CreatePopupMenu() {
+        for (i, name) in [tx.menu_lang_auto, i18n::NAME_DE, i18n::NAME_EN].iter().enumerate() {
+            append(sub, MF_STRING, CMD_LANG0 + i, name);
+        }
+        let cur = LANG_PREFS.iter().position(|p| *p == app.settings.lang).unwrap_or(0);
+        let last = CMD_LANG0 + LANG_PREFS.len() - 1;
+        let _ = CheckMenuRadioItem(sub, CMD_LANG0 as u32, last as u32, (CMD_LANG0 + cur) as u32, MF_BYCOMMAND.0);
+        append(menu, MF_POPUP, sub.0 as usize, tx.menu_language);
+    }
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-    let _ = AppendMenuW(menu, MF_STRING, CMD_EXIT, w!("Beenden"));
+    append(menu, MF_STRING, CMD_EXIT, tx.menu_exit);
     let _ = SetForegroundWindow(hwnd);
     let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, None);
     let _ = DestroyMenu(menu);
@@ -280,6 +313,14 @@ unsafe fn show_menu(hwnd: HWND, app: &mut App, mut pt: POINT) {
         }
         CMD_EXIT => {
             let _ = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
+        c if (CMD_LANG0..CMD_LANG0 + LANG_PREFS.len()).contains(&c) => {
+            // Wirkt sofort: Fenster, Menü, Tooltips und Dialog lesen die
+            // Texte bei jeder Verwendung neu.
+            app.settings.lang = LANG_PREFS[c - CMD_LANG0];
+            apply_lang(app.settings.lang);
+            app.settings.save();
+            app.invalidate(hwnd);
         }
         _ => {}
     }
@@ -456,6 +497,7 @@ fn main() -> Result<()> {
         }
 
         let mut settings = Settings::load();
+        apply_lang(settings.lang);
         if has("--topmost") {
             settings.topmost = true;
         }

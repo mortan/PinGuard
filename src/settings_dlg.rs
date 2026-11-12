@@ -3,6 +3,7 @@
 //! werden in `WM_INITDIALOG` in Dialogeinheiten angelegt. Dadurch gibt es
 //! Tab-Navigation, Enter/Esc und DPI-Skalierung ohne Ressourcendatei.
 
+use crate::i18n::{short, t};
 use crate::model::{field, AlarmCfg, Config, ImbalanceMode, Limits, Metric, CONNECTOR_METRICS, FAULTS, FAULT_COUNT, METRICS, METRIC_COUNT, PSU_METRICS};
 use crate::settings::parse_num;
 use windows::core::{w, PCWSTR};
@@ -43,32 +44,24 @@ const LEFT_W: i32 = 262;
 const DLG_W: i16 = 372;
 const DLG_H: i16 = 293;
 
-/// Zeilen der Gruppe "Grenzwerte": Beschriftung, Einheit, Feldindex
-/// (`None` = Auswahl der Schieflast-Messart).
-const LIMIT_ROWS: [(&str, &str, Option<usize>); 8] = [
-    ("Pin gelb ab", "A", Some(field::PIN_WARN)),
-    ("Pin rot / Überstrom ab", "A", Some(field::PIN_LIMIT)),
-    ("Balken-Vollausschlag", "A", Some(field::FULL_SCALE)),
-    ("Schieflast messen als", "", None),
-    ("Schieflast (max − min) ab", "A", Some(field::IMB_A)),
-    ("Schieflast (Abw. vom Mittel) ab", "%", Some(field::IMB_PCT)),
-    ("  … erst ab Steckerstrom (Σ)", "A", Some(field::IMB_MIN_LOAD)),
-    ("Nennleistung je Stecker", "W", Some(field::RATED_W)),
+/// Zeilen der Gruppe "Grenzwerte": Einheit, Feldindex (`None` = Auswahl der
+/// Schieflast-Messart). Die Beschriftungen stehen in `Texts::limit_rows`.
+const LIMIT_ROWS: [(&str, Option<usize>); 8] = [
+    ("A", Some(field::PIN_WARN)),
+    ("A", Some(field::PIN_LIMIT)),
+    ("A", Some(field::FULL_SCALE)),
+    ("", None),
+    ("A", Some(field::IMB_A)),
+    ("%", Some(field::IMB_PCT)),
+    ("A", Some(field::IMB_MIN_LOAD)),
+    ("W", Some(field::RATED_W)),
 ];
-const MODE_NAMES: [&str; 2] = ["Ampere", "Prozent"];
+/// Reihenfolge wie `Texts::modes`.
 const MODES: [ImbalanceMode; 2] = [ImbalanceMode::Amps, ImbalanceMode::Percent];
-const ALARM_COLS: [&str; 4] = ["Aktiv", "Halten", "Ton", "Zeigen"];
 const COL_X: [i32; 4] = [130, 160, 190, 220];
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-/// Zahl für ein Eingabefeld: ohne unnötige Nachkommastellen, mit Komma.
-fn fmt_num(v: f32) -> String {
-    let s = format!("{:.2}", v);
-    let s = s.trim_end_matches('0').trim_end_matches('.');
-    s.replace('.', ",")
 }
 
 fn limit_vals(l: &Limits) -> [f32; field::COUNT] {
@@ -90,7 +83,7 @@ fn template() -> Vec<u32> {
     }
     t.push(0); // kein Menü
     t.push(0); // Standard-Dialogklasse
-    t.extend(wide("GpuMon – Einstellungen"));
+    t.extend(wide(crate::i18n::t().dlg_title));
     t.push(9); // Schriftgröße (pt)
     t.extend(wide("MS Shell Dlg")); // mit DS_FIXEDSYS → Segoe UI
     // DWORD-ausgerichtet ablegen
@@ -150,7 +143,8 @@ unsafe fn get_check(dlg: HWND, id: i32) -> bool {
 
 unsafe fn fill(dlg: HWND, cfg: &Config) {
     for (i, v) in limit_vals(&cfg.limits).iter().enumerate() {
-        set_text(dlg, ID_LIMIT0 + i as i32, &fmt_num(*v));
+        // Zahl im Format der Sprache; die Eingabe akzeptiert Punkt und Komma.
+        set_text(dlg, ID_LIMIT0 + i as i32, &short(*v));
     }
     let mode = MODES.iter().position(|m| *m == cfg.limits.imbalance_mode).unwrap_or(0);
     SendDlgItemMessageW(dlg, ID_IMB_MODE, CB_SETCURSEL, WPARAM(mode), LPARAM(0));
@@ -199,7 +193,7 @@ unsafe fn read(dlg: HWND) -> Option<Config> {
         match parse_num(&get_text(dlg, id)) {
             Some(n) => *v = n,
             None => {
-                error(dlg, id, "Bitte eine Zahl eingeben.");
+                error(dlg, id, t().err_number);
                 return None;
             }
         }
@@ -232,7 +226,8 @@ unsafe fn read(dlg: HWND) -> Option<Config> {
 
 unsafe fn error(dlg: HWND, id: i32, msg: &str) {
     let m = wide(msg);
-    MessageBoxW(dlg, PCWSTR(m.as_ptr()), w!("GpuMon – Einstellungen"), MB_OK | MB_ICONWARNING);
+    let title = wide(t().dlg_title);
+    MessageBoxW(dlg, PCWSTR(m.as_ptr()), PCWSTR(title.as_ptr()), MB_OK | MB_ICONWARNING);
     if let Ok(h) = GetDlgItem(dlg, id) {
         let _ = SetFocus(h);
         SendMessageW(h, EM_SETSEL, WPARAM(0), LPARAM(-1));
@@ -241,13 +236,14 @@ unsafe fn error(dlg: HWND, id: i32, msg: &str) {
 
 unsafe fn init(dlg: HWND, ctx: &Ctx) {
     let f = ctx.font;
+    let tx = t();
     let st = w!("STATIC");
     let bt = w!("BUTTON");
 
     // Grenzwerte
     let rows = LIMIT_ROWS.len() as i32;
-    ctl(dlg, f, bt, "Grenzwerte", BS_GROUPBOX, 7, 5, LEFT_W - 14, 17 + rows * 15, -1);
-    for (i, (label, unit, fld)) in LIMIT_ROWS.iter().enumerate() {
+    ctl(dlg, f, bt, tx.grp_limits, BS_GROUPBOX, 7, 5, LEFT_W - 14, 17 + rows * 15, -1);
+    for (i, ((unit, fld), label)) in LIMIT_ROWS.iter().zip(tx.limit_rows).enumerate() {
         let y = 19 + i as i32 * 15;
         ctl(dlg, f, st, label, SS_LEFT, 15, y + 2, 140, 9, -1);
         match fld {
@@ -259,7 +255,7 @@ unsafe fn init(dlg: HWND, ctx: &Ctx) {
             None => {
                 // Höhe inkl. aufgeklappter Liste
                 let cb = ctl(dlg, f, w!("COMBOBOX"), "", CBS_DROPDOWNLIST | WS_VSCROLL.0 | WS_TABSTOP.0, 160, y, 88, 60, ID_IMB_MODE);
-                for name in MODE_NAMES {
+                for name in tx.modes {
                     let t = wide(name);
                     SendMessageW(cb, CB_ADDSTRING, WPARAM(0), LPARAM(t.as_ptr() as isize));
                 }
@@ -269,8 +265,8 @@ unsafe fn init(dlg: HWND, ctx: &Ctx) {
 
     // Alarme
     let gy = 13 + 17 + rows * 15;
-    ctl(dlg, f, bt, "Alarme", BS_GROUPBOX, 7, gy, LEFT_W - 14, 114, -1);
-    for (ci, name) in ALARM_COLS.iter().enumerate() {
+    ctl(dlg, f, bt, tx.grp_alarms, BS_GROUPBOX, 7, gy, LEFT_W - 14, 114, -1);
+    for (ci, name) in tx.alarm_cols.iter().enumerate() {
         ctl(dlg, f, st, name, SS_CENTER, COL_X[ci] - 8, gy + 12, 26, 9, -1);
     }
     for (fi, fault) in FAULTS.iter().enumerate() {
@@ -285,7 +281,7 @@ unsafe fn init(dlg: HWND, ctx: &Ctx) {
         dlg,
         f,
         st,
-        "Halten: bleibt orange markiert, bis die Statuszeile angeklickt wird.\nZeigen: Fenster wiederherstellen, nach vorne holen und blinken.",
+        tx.alarm_note,
         SS_LEFT,
         15,
         gy + 24 + FAULT_COUNT as i32 * 13 + 2,
@@ -296,9 +292,9 @@ unsafe fn init(dlg: HWND, ctx: &Ctx) {
 
     // Anzeige: welche Kennzahlen das rechte Panel zeigt
     let ax = LEFT_W - 2;
-    ctl(dlg, f, bt, "Anzeige", BS_GROUPBOX, ax, 5, DLG_W as i32 - 7 - ax, gy + 114 - 5, -1);
+    ctl(dlg, f, bt, tx.grp_display, BS_GROUPBOX, ax, 5, DLG_W as i32 - 7 - ax, gy + 114 - 5, -1);
     let mut y = 19;
-    let groups: [(&str, &[Metric]); 3] = [("Stecker", &CONNECTOR_METRICS), ("Netzteil", &PSU_METRICS), ("", &[Metric::Rails])];
+    let groups: [(&str, &[Metric]); 3] = [(tx.disp_conn, &CONNECTOR_METRICS), (tx.disp_psu, &PSU_METRICS), ("", &[Metric::Rails])];
     for (name, ms) in groups {
         if !name.is_empty() {
             ctl(dlg, f, st, name, SS_LEFT, ax + 8, y, 80, 9, -1);
@@ -310,13 +306,13 @@ unsafe fn init(dlg: HWND, ctx: &Ctx) {
         }
         y += 5;
     }
-    ctl(dlg, f, st, "Auslastung bezieht sich auf die Nennleistung je Stecker.", SS_LEFT, ax + 8, y + 2, 92, 26, -1);
+    ctl(dlg, f, st, tx.load_note, SS_LEFT, ax + 8, y + 2, 92, 26, -1);
 
     // Knöpfe
     let by = DLG_H as i32 - 21;
-    ctl(dlg, f, bt, "Standardwerte", BS_PUSHBUTTON | WS_TABSTOP.0, 7, by, 60, 14, ID_DEFAULTS);
+    ctl(dlg, f, bt, tx.btn_defaults, BS_PUSHBUTTON | WS_TABSTOP.0, 7, by, 60, 14, ID_DEFAULTS);
     ctl(dlg, f, bt, "OK", BS_DEFPUSHBUTTON | WS_TABSTOP.0, DLG_W as i32 - 117, by, 52, 14, IDOK.0);
-    ctl(dlg, f, bt, "Abbrechen", BS_PUSHBUTTON | WS_TABSTOP.0, DLG_W as i32 - 59, by, 52, 14, IDCANCEL.0);
+    ctl(dlg, f, bt, tx.btn_cancel, BS_PUSHBUTTON | WS_TABSTOP.0, DLG_W as i32 - 59, by, 52, 14, IDCANCEL.0);
 
     fill(dlg, &ctx.cfg);
     if let Ok(h) = GetDlgItem(dlg, ID_LIMIT0) {

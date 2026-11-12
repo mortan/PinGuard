@@ -9,6 +9,7 @@
 //! Das Layout ist in einem festen Basisraster (`BASE_W` × `BASE_H` DIPs)
 //! definiert und wird auf die Fenstergröße skaliert.
 
+use crate::i18n::{self, fixed, short, t};
 use crate::model::*;
 use crate::source::Reading;
 use windows::core::w;
@@ -109,7 +110,10 @@ struct MetricLayout {
     cells: Vec<(Metric, R)>,
 }
 
-const METRIC_GROUPS: [(&str, &[Metric]); 2] = [("STECKER", &CONNECTOR_METRICS), ("NETZTEIL", &PSU_METRICS)];
+/// Gruppen mit Überschrift in der aktuellen Sprache.
+fn metric_groups() -> [(&'static str, &'static [Metric]); 2] {
+    [(t().head_conn, &CONNECTOR_METRICS), (t().head_psu, &PSU_METRICS)]
+}
 const METRIC_X0: f32 = 212.0;
 const METRIC_COL_W: f32 = 111.0;
 const METRIC_TOP: f32 = 10.0;
@@ -117,7 +121,7 @@ const METRIC_TOP: f32 = 10.0;
 const RAILS_TOP: f32 = 130.0;
 
 fn metric_layout(cfg: &Config) -> MetricLayout {
-    let groups: Vec<(&'static str, Vec<Metric>)> = METRIC_GROUPS
+    let groups: Vec<(&'static str, Vec<Metric>)> = metric_groups()
         .iter()
         .map(|(name, ms)| (*name, ms.iter().copied().filter(|m| cfg.shows(*m)).collect::<Vec<_>>()))
         .filter(|(_, ms)| !ms.is_empty())
@@ -146,17 +150,9 @@ fn metric_layout(cfg: &Config) -> MetricLayout {
     out
 }
 
-const CHIPS: [(Fault, &str); FAULT_COUNT] = [
-    (Fault::Alarm1, "ALARM S1"),
-    (Fault::Alarm2, "ALARM S2"),
-    (Fault::OverCurrent, "ÜBERSTROM"),
-    (Fault::Imbalance, "SCHIEFLAST"),
-    (Fault::NoData, "VERBINDUNG"),
-];
-
-/// Die angezeigten Statusfelder mit ihrer Fläche.
+/// Die angezeigten Statusfelder mit Beschriftung und Fläche.
 fn visible_chips(v: &View) -> Vec<(Fault, &'static str, R)> {
-    let chips: Vec<_> = CHIPS.iter().filter(|(f, _)| v.monitor.show_fault(*f)).collect();
+    let chips: Vec<_> = FAULTS.iter().filter(|f| v.monitor.show_fault(**f)).map(|f| (*f, t().chips[*f as usize])).collect();
     let gap = 5.0;
     let n = chips.len() as f32;
     let cw = (STATUS_X1 - STATUS_X0 - gap * (n - 1.0)) / n;
@@ -168,12 +164,6 @@ fn visible_chips(v: &View) -> Vec<(Fault, &'static str, R)> {
             (*f, *label, rect(x, STATUS_Y0, x + cw, STATUS_Y1))
         })
         .collect()
-}
-
-/// Zahl ohne unnötige Nachkommastellen, mit Dezimalkomma.
-fn num(v: f32) -> String {
-    let s = format!("{:.2}", v);
-    s.trim_end_matches('0').trim_end_matches('.').replace('.', ",")
 }
 
 /// Tooltip für eine Stelle der Oberfläche. `id` kennzeichnet den Bereich
@@ -193,24 +183,24 @@ pub fn hint_at(x: f32, y: f32, v: &View) -> Option<Hint> {
     if (STATUS_Y0..=STATUS_Y1).contains(&y) {
         let (fault, _, _) = visible_chips(v).into_iter().find(|(_, _, r)| x >= r.left && x <= r.right)?;
         let what = match fault {
-            Fault::Alarm1 => "Netzteil-Alarm Stecker 1: vom Netzteil selbst gemeldet".to_string(),
-            Fault::Alarm2 => "Netzteil-Alarm Stecker 2: vom Netzteil selbst gemeldet".to_string(),
-            Fault::OverCurrent => format!("Überstrom: ein Pin führt {} A oder mehr", num(lim.pin_limit_a)),
+            Fault::Alarm1 => i18n::fault_alarm(1),
+            Fault::Alarm2 => i18n::fault_alarm(2),
+            Fault::OverCurrent => i18n::fault_overcurrent(&short(lim.pin_limit_a)),
             Fault::Imbalance => match lim.imbalance_mode {
-                ImbalanceMode::Amps => format!("Schieflast: größter minus kleinster Pin-Strom ab {} A", num(lim.imbalance_a)),
-                ImbalanceMode::Percent => format!("Schieflast: ein Pin weicht {} % oder mehr vom Mittel ab", num(lim.imbalance_pct)),
+                ImbalanceMode::Amps => i18n::fault_imbalance_amps(&short(lim.imbalance_a)),
+                ImbalanceMode::Percent => i18n::fault_imbalance_pct(&short(lim.imbalance_pct)),
             },
-            Fault::NoData => format!("Verbindung: keine Netzteil-Daten von {}", v.source_name),
+            Fault::NoData => i18n::fault_nodata(v.source_name),
         };
         let st = v.monitor.fault(fault);
         let state = if !v.config.alarm(fault).enabled {
-            "Alarm ist abgeschaltet."
+            t().st_disabled
         } else if st.active {
-            "Jetzt aktiv."
+            t().st_active
         } else if st.latched {
-            "War ausgelöst – Klick setzt zurück."
+            t().st_latched
         } else {
-            "In Ordnung."
+            t().st_ok
         };
         return hint(300 + fault as u32, format!("{what}\n{state}"));
     }
@@ -226,10 +216,10 @@ pub fn hint_at(x: f32, y: f32, v: &View) -> Option<Hint> {
         let in_bars = (BAR_TOP..=BAR_BOTTOM).contains(&y);
         let on_label = !both && x >= 158.0 && (9.0..=25.0).contains(&y);
         if on_label || (in_bars && (y - amp_y(lim, lim.pin_limit_a)).abs() <= 2.5) {
-            return hint(1, format!("Überstrom-Grenze: {} A je Pin\nAb hier wird der Pin rot und ÜBERSTROM löst aus.", num(lim.pin_limit_a)));
+            return hint(1, i18n::tip_pin_limit(&short(lim.pin_limit_a)));
         }
         if in_bars && (y - amp_y(lim, lim.pin_warn_a)).abs() <= 2.5 {
-            return hint(2, format!("Warnschwelle: {} A je Pin\nAb hier wird der Pin gelb.", num(lim.pin_warn_a)));
+            return hint(2, i18n::tip_pin_warn(&short(lim.pin_warn_a)));
         }
         if (26.0..=157.0).contains(&y) && (BAR_X0..BAR_X1).contains(&x) {
             let (group_w, gap) = bar_groups(nvis);
@@ -238,14 +228,8 @@ pub fn hint_at(x: f32, y: f32, v: &View) -> Option<Hint> {
             if lx < group_w {
                 let p = ((lx / group_w * PINS as f32) as usize).min(PINS - 1);
                 let c = vis[g];
-                let now = if stats[c].present { format!("{} A", de(stats[c].pins[p], 2)) } else { "keine Daten".into() };
-                let text = format!(
-                    "Stecker {} · Pin {}\nAktuell: {}\nPeak: {} A (Doppelklick setzt zurück)",
-                    c + 1,
-                    p + 1,
-                    now,
-                    de(v.monitor.peaks[c][p], 2)
-                );
+                let now = if stats[c].present { format!("{} A", fixed(stats[c].pins[p], 2)) } else { t().no_data.into() };
+                let text = i18n::tip_pin(c + 1, p + 1, &now, &fixed(v.monitor.peaks[c][p], 2));
                 return hint(100 + (c * PINS + p) as u32, text);
             }
         }
@@ -255,38 +239,25 @@ pub fn hint_at(x: f32, y: f32, v: &View) -> Option<Hint> {
     // Kennzahlen
     let cell = metric_layout(v.config).cells.into_iter().find(|(_, r)| (r.left..r.right).contains(&x) && (r.top..r.bottom).contains(&y));
     if let Some((m, _)) = cell {
-        let scope = if both { " beider Stecker" } else { "" };
         let text = match m {
-            Metric::ConnW => format!("Leistung über den 12V-2x6-Stecker\nSumme der Pin-Ströme{scope} × 12-V-Spannung"),
-            Metric::Load => format!("Auslastung: Steckerleistung bezogen auf {} W Nennleistung je Stecker\nGelb ab 85 %, rot ab 100 %", num(lim.connector_rated_w)),
-            Metric::SumA => format!("Summe der Pin-Ströme{scope}"),
-            Metric::MaxPin => format!(
-                "Höchster Pin-Strom im Moment\n{}\nGelb ab {} A, rot ab {} A",
-                if both { "1.3 = Stecker 1, Pin 3" } else { "P3 = Pin 3" },
-                num(lim.pin_warn_a),
-                num(lim.pin_limit_a)
-            ),
-            Metric::Imbalance => {
-                let worst = if both { "\nAngezeigt wird der höhere Wert beider Stecker." } else { "" };
-                match lim.imbalance_mode {
-                    ImbalanceMode::Amps => format!(
-                        "Schieflast: größter minus kleinster Pin-Strom\nGelb ab {} A, Alarm ab {} A{worst}",
-                        num(lim.imbalance_a * 0.5),
-                        num(lim.imbalance_a)
-                    ),
-                    ImbalanceMode::Percent => format!(
-                        "Schieflast: größte Abweichung eines Pins vom Mittelwert\nGelb ab {} %, Alarm ab {} %, bewertet ab {} A Steckerstrom{worst}",
-                        num(lim.imbalance_pct * 0.5),
-                        num(lim.imbalance_pct),
-                        num(lim.imbalance_min_load_a)
-                    ),
-                }
-            }
-            Metric::GpuW => format!("Leistungsaufnahme der Grafikkarte\n(Sensor „Power“ aus {})", v.source_name),
-            Metric::PsuW => "Gesamte Ausgangsleistung des Netzteils (DC-Seite)".to_string(),
-            Metric::Eff => "Vom Netzteil gemeldeter Wirkungsgrad".to_string(),
-            Metric::Temp => "Temperatur im Netzteil".to_string(),
-            Metric::Fan | Metric::Rails => "Drehzahl des Netzteillüfters\n0 rpm: Lüfter steht".to_string(),
+            Metric::ConnW => i18n::tip_conn_w(both),
+            Metric::Load => i18n::tip_load(&short(lim.connector_rated_w)),
+            Metric::SumA => i18n::tip_sum(both),
+            Metric::MaxPin => i18n::tip_max(both, &short(lim.pin_warn_a), &short(lim.pin_limit_a)),
+            Metric::Imbalance => match lim.imbalance_mode {
+                ImbalanceMode::Amps => i18n::tip_imbalance_amps(both, &short(lim.imbalance_a * 0.5), &short(lim.imbalance_a)),
+                ImbalanceMode::Percent => i18n::tip_imbalance_pct(
+                    both,
+                    &short(lim.imbalance_pct * 0.5),
+                    &short(lim.imbalance_pct),
+                    &short(lim.imbalance_min_load_a),
+                ),
+            },
+            Metric::GpuW => i18n::tip_gpu(v.source_name),
+            Metric::PsuW => t().tip_psu_w.to_string(),
+            Metric::Eff => t().tip_eff.to_string(),
+            Metric::Temp => t().tip_temp.to_string(),
+            Metric::Fan | Metric::Rails => t().tip_fan.to_string(),
         };
         return hint(200 + m as u32, text);
     }
@@ -294,20 +265,18 @@ pub fn hint_at(x: f32, y: f32, v: &View) -> Option<Hint> {
     // Rails
     if v.config.shows(Metric::Rails) && (218.0..431.0).contains(&x) && (132.0..=157.0).contains(&y) {
         let i = (((x - 218.0) / 71.0) as usize).min(2);
-        let name = ["12-V", "5-V", "3,3-V"][i];
-        return hint(220 + i as u32, format!("{name}-Schiene des Netzteils: Spannung · Strom"));
+        return hint(220 + i as u32, i18n::tip_rail(&short(RAIL_VOLTS[i])));
     }
     None
 }
 
-/// Zahl mit deutschem Dezimalkomma.
-fn de(v: f32, decimals: usize) -> String {
-    format!("{:.*}", decimals, v).replace('.', ",")
-}
+/// Nennspannungen der Schienen (Beschriftung und Tooltip).
+const RAIL_VOLTS: [f32; 3] = [12.0, 5.0, 3.3];
 
+/// Messwert mit Einheit im Zahlenformat der Sprache, "–" wenn er fehlt.
 fn opt(v: Option<f32>, decimals: usize, unit: &str) -> String {
     match v {
-        Some(v) => format!("{} {}", de(v, decimals), unit),
+        Some(v) => format!("{} {}", fixed(v, decimals), unit),
         None => "–".into(),
     }
 }
@@ -593,8 +562,8 @@ impl Painter<'_> {
         // Hinweis bei fehlenden Daten über dem Balken-Panel
         let hint = match v.reading {
             Reading::Data(_) => None,
-            Reading::Offline => Some((format!("{} läuft nicht", v.source_name), "warte auf Daten …")),
-            Reading::NoPsu => Some(("Keine PSU-Daten".to_string(), "PSU-Plugin in Afterburner aktivieren")),
+            Reading::Offline => Some((i18n::not_running(v.source_name), t().waiting)),
+            Reading::NoPsu => Some((t().no_psu.to_string(), t().enable_plugin)),
         };
         if let Some((l1, l2)) = hint {
             self.fill_round(rect(14.0, 58.0, 198.0, 108.0), 5.0, BG, 0.88);
@@ -617,15 +586,19 @@ impl Painter<'_> {
             for (g, &c) in vis.iter().enumerate() {
                 let (l, r) = (x0 + g as f32 * (group_w + gap) + 1.0, x0 + g as f32 * (group_w + gap) + group_w - 1.0);
                 let mid = (l + r) / 2.0;
-                let (yl, half) = (17.0, 27.0);
+                let label = format!("{} {}", t().connector, c + 1);
+                // Lücke in der Klammer: mindestens wie bisher, bei längerem
+                // Text (englisch) so breit wie nötig.
+                let half = (self.text_width(&label, F::Title) / 2.0 + 3.0).clamp(27.0, (r - l) / 2.0 - 4.0);
+                let yl = 17.0;
                 self.fill(rect(l, yl - 0.5, mid - half, yl + 0.5), FAINT, 1.0);
                 self.fill(rect(mid + half, yl - 0.5, r, yl + 0.5), FAINT, 1.0);
                 self.fill(rect(l, yl - 0.5, l + 1.0, 26.0), FAINT, 1.0);
                 self.fill(rect(r - 1.0, yl - 0.5, r, 26.0), FAINT, 1.0);
-                self.text(&format!("Stecker {}", c + 1), F::Title, rect(mid - half, 9.0, mid + half, 25.0), Align::Center, DIM, 1.0);
+                self.text(&label, F::Title, rect(mid - half, 9.0, mid + half, 25.0), Align::Center, DIM, 1.0);
             }
         } else {
-            let title = format!("12V-2x6 · Stecker {}", vis[0] + 1);
+            let title = format!("12V-2x6 · {} {}", t().connector, vis[0] + 1);
             self.text(&title, F::Title, rect(14.0, 9.0, 200.0, 25.0), Align::Left, DIM, 1.0);
         }
 
@@ -644,7 +617,7 @@ impl Painter<'_> {
                     if bottom - y > 0.5 {
                         self.fill_round(rect(bx, y, bx + bw, bottom), 2.0, col, 1.0);
                     }
-                    let txt = de(a, if compact { 1 } else { 2 });
+                    let txt = fixed(a, if compact { 1 } else { 2 });
                     let f = if compact { F::Tiny } else { F::Small };
                     self.text(&txt, f, rect(bx - 8.0, 126.0, bx + bw + 8.0, 141.0), Align::Center, col, 1.0);
                 } else {
@@ -669,7 +642,7 @@ impl Painter<'_> {
         self.fill(rect(x0 - 3.0, yl - 0.6, x1 + 3.0, yl + 0.6), RED, 0.9);
         let yw = y_of(lim.pin_warn_a);
         self.fill(rect(x0 - 3.0, yw - 0.4, x1 + 3.0, yw + 0.4), YELLOW, 0.55);
-        let lbl = format!("{} A", de(lim.pin_limit_a, 1));
+        let lbl = format!("{} A", fixed(lim.pin_limit_a, 1));
         let lw = self.text_width(&lbl, F::Label);
         if compact {
             // Die Titelzeile gehört den Klammern: Beschriftung bleibt an der
@@ -726,9 +699,10 @@ impl Painter<'_> {
             let ly = (r.top + r.bottom) / 2.0 + 0.5;
             self.fill(rect(lx, ly - 0.35, r.right, ly + 0.35), FAINT, 0.6);
         }
+        let tx = t();
         for (m, r) in &layout.cells {
             let (label, value, col) = match m {
-                Metric::ConnW => ("Leistung", opt(watts, 0, "W"), ACCENT),
+                Metric::ConnW => (tx.lbl_power, opt(watts, 0, "W"), ACCENT),
                 Metric::Load => {
                     let load = watts.map(|w| w / (lim.connector_rated_w * vis.len() as f32) * 100.0);
                     let col = match load {
@@ -736,30 +710,30 @@ impl Painter<'_> {
                         Some(l) if l >= 85.0 => YELLOW,
                         _ => TEXT,
                     };
-                    ("Auslast.", opt(load, 0, "%"), col)
+                    (tx.lbl_load, opt(load, 0, "%"), col)
                 }
-                Metric::SumA => ("Σ Strom", opt(sel.map(|s| s.1), 1, "A"), TEXT),
+                Metric::SumA => (tx.lbl_sum, opt(sel.map(|s| s.1), 1, "A"), TEXT),
                 Metric::MaxPin => match sel {
                     Some((_, _, mx, c, p, _, _)) => {
                         let pin = if vis.len() == 2 { format!("{}.{}", c + 1, p + 1) } else { format!("P{}", p + 1) };
-                        ("Max", format!("{} A {}", de(mx, 1), pin), value_color(lim.pin_level(mx)))
+                        (tx.lbl_max, format!("{} A {}", fixed(mx, 1), pin), value_color(lim.pin_level(mx)))
                     }
-                    None => ("Max", "–".into(), TEXT),
+                    None => (tx.lbl_max, "–".into(), TEXT),
                 },
                 // Schieflast in der gewählten Messart; Farbe wie die
                 // Alarmbewertung (bei Prozent erst ab Mindestlast).
                 Metric::Imbalance => {
                     let col = value_color(sel.map_or(0, |s| s.6));
                     match lim.imbalance_mode {
-                        ImbalanceMode::Amps => ("Δ Pins", opt(sel.map(|s| s.5), 2, "A"), col),
-                        ImbalanceMode::Percent => ("Abw.", opt(sel.map(|s| s.5), 0, "%"), col),
+                        ImbalanceMode::Amps => (tx.lbl_delta, opt(sel.map(|s| s.5), 2, "A"), col),
+                        ImbalanceMode::Percent => (tx.lbl_dev, opt(sel.map(|s| s.5), 0, "%"), col),
                     }
                 }
-                Metric::GpuW => ("GPU", opt(g(idx::GPU_W), 0, "W"), TEXT),
-                Metric::PsuW => ("Leistung", opt(g(idx::PSU_W), 0, "W"), TEXT),
-                Metric::Eff => ("Effizienz", opt(g(idx::EFF), 1, "%"), TEXT),
-                Metric::Temp => ("Temp.", opt(g(idx::TEMP), 0, "°C"), TEXT),
-                Metric::Fan => ("Lüfter", opt(g(idx::FAN), 0, "rpm"), TEXT),
+                Metric::GpuW => (tx.lbl_gpu, opt(g(idx::GPU_W), 0, "W"), TEXT),
+                Metric::PsuW => (tx.lbl_power, opt(g(idx::PSU_W), 0, "W"), TEXT),
+                Metric::Eff => (tx.lbl_eff, opt(g(idx::EFF), 1, "%"), TEXT),
+                Metric::Temp => (tx.lbl_temp, opt(g(idx::TEMP), 0, "°C"), TEXT),
+                Metric::Fan => (tx.lbl_fan, opt(g(idx::FAN), 0, "rpm"), TEXT),
                 Metric::Rails => continue,
             };
             self.cell(*r, label, &value, col);
@@ -770,10 +744,11 @@ impl Painter<'_> {
             return;
         }
         self.fill(rect(220.0, 131.0, 426.0, 131.7), FAINT, 0.6);
-        let rails = [("12 V", idx::V12, idx::A12), ("5 V", idx::V5, idx::A5), ("3,3 V", idx::V33, idx::A33)];
-        for (i, (name, vi, ai)) in rails.iter().enumerate() {
+        let rails = [(idx::V12, idx::A12), (idx::V5, idx::A5), (idx::V33, idx::A33)];
+        for (i, (vi, ai)) in rails.iter().enumerate() {
             let x = 218.0 + i as f32 * 71.0;
-            self.text(name, F::Label, rect(x, 132.0, x + 70.0, 144.0), Align::Center, DIM, 1.0);
+            let name = format!("{} V", short(RAIL_VOLTS[i]));
+            self.text(&name, F::Label, rect(x, 132.0, x + 70.0, 144.0), Align::Center, DIM, 1.0);
             let txt = match (g(*vi), g(*ai)) {
                 (None, None) => "–".to_string(),
                 (v, a) => format!("{} · {}", opt(v, 2, "V"), opt(a, 1, "A")),
@@ -823,6 +798,7 @@ mod tests {
 
     #[test]
     fn hints() {
+        i18n::set_lang(i18n::Lang::De);
         let (cfg, mut mon) = (Config::default(), Monitor::default());
         let reading = Reading::Data(snapshot());
         mon.update(Some(&snapshot()), &cfg);
@@ -863,5 +839,79 @@ mod tests {
         let v = View { reading: &off, monitor: &mon, config: &cfg, source_name: "Test" };
         assert!(hint_at(88.0, 100.0, &v).is_none());
         assert!(hint_at(420.0, 178.0, &v).is_some());
+    }
+
+    #[test]
+    fn hints_english() {
+        i18n::set_lang(i18n::Lang::En);
+        let (cfg, mut mon) = (Config::default(), Monitor::default());
+        let reading = Reading::Data(snapshot());
+        mon.update(Some(&snapshot()), &cfg);
+        let v = View { reading: &reading, monitor: &mon, config: &cfg, source_name: "Test" };
+        let h = hint_at(88.0, 100.0, &v).unwrap();
+        assert_eq!(h.id, 102);
+        assert!(h.text.starts_with("Connector 1 · Pin 3") && h.text.contains("6.20 A"), "{}", h.text);
+        assert!(hint_at(88.0, amp_y(&cfg.limits, 9.2), &v).unwrap().text.starts_with("Overcurrent limit: 9.2 A per pin"));
+        assert!(hint_at(250.0, 58.0, &v).unwrap().text.contains("P3 = pin 3"));
+        assert!(hint_at(250.0, 150.0, &v).unwrap().text.starts_with("12 V rail"));
+        let ok = hint_at(60.0, 178.0, &v).unwrap().text;
+        assert!(ok.starts_with("PSU alarm connector 1") && ok.ends_with("\nOK."), "{ok}");
+        assert!(hint_at(420.0, 178.0, &v).unwrap().text.starts_with("Link: no PSU data from Test"));
+        // gleiche Bereiche wie auf Deutsch
+        i18n::set_lang(i18n::Lang::De);
+        assert_eq!(hint_at(380.0, 118.0, &v).unwrap().id, 200 + Metric::Fan as u32);
+        i18n::set_lang(i18n::Lang::En);
+        assert_eq!(hint_at(380.0, 118.0, &v).unwrap().id, 200 + Metric::Fan as u32);
+        assert!(hint_at(380.0, 118.0, &v).unwrap().text.starts_with("PSU fan speed"));
+    }
+
+    /// Englische Chip- und Kennzahl-Texte sind mit der echten Schrift
+    /// gemessen nicht breiter als die deutschen und passen in ihre Fläche.
+    #[test]
+    fn english_labels_fit() {
+        unsafe {
+            let dc = CreateCompatibleDC(None);
+            assert!(!dc.is_invalid());
+            let px = 4.0; // Pixel je Basiseinheit, genug Auflösung zum Messen
+            let width = |s: &str, f: F| {
+                let (size, weight) = FONT_SPECS[f as usize];
+                let font = CreateFontW(-((size * px).round() as i32), 0, 0, 0, weight, 0, 0, 0, 1, 0, 0, 5, 0, w!("Segoe UI"));
+                let old = SelectObject(dc, font);
+                let w: Vec<u16> = s.encode_utf16().collect();
+                let mut sz = SIZE::default();
+                let _ = GetTextExtentPoint32W(dc, &w, &mut sz);
+                SelectObject(dc, old);
+                let _ = DeleteObject(font);
+                sz.cx as f32 / px
+            };
+            let texts = |l: i18n::Lang| {
+                i18n::set_lang(l);
+                let t = t();
+                let labels = [t.lbl_power, t.lbl_sum, t.lbl_max, t.lbl_delta, t.lbl_dev, t.lbl_load, t.lbl_gpu, t.lbl_eff, t.lbl_temp, t.lbl_fan];
+                (t.chips, labels)
+            };
+            let (de_chips, de_labels) = texts(i18n::Lang::De);
+            let (en_chips, en_labels) = texts(i18n::Lang::En);
+            // Alle fünf Statusfelder sichtbar: schmalste Breite; Punkt + Abstand 9.
+            let chip_w = (STATUS_X1 - STATUS_X0 - 4.0 * 5.0) / 5.0;
+            // Nicht mehr Zeichen als deutsch; gemessen höchstens eine Spur
+            // breiter (ALARM C1 / IMBALANCE: < 1 Basiseinheit wegen C bzw. M).
+            for (d, e) in de_chips.iter().zip(en_chips) {
+                let (wd, we) = (width(d, F::Chip), width(e, F::Chip));
+                assert!(e.chars().count() <= d.chars().count(), "Chip {e} länger als {d}");
+                assert!(we <= wd + 1.5, "Chip {e} ({we}) breiter als {d} ({wd})");
+                assert!(we + 9.0 <= chip_w, "Chip {e} passt nicht ({we})");
+            }
+            // Label-Bereich: x + 9 … x + 60
+            for (d, e) in de_labels.iter().zip(en_labels) {
+                let (wd, we) = (width(d, F::Label), width(e, F::Label));
+                assert!(we <= wd + 0.5, "Label {e} ({we}) breiter als {d} ({wd})");
+                assert!(we <= 51.0, "Label {e} zu breit ({we})");
+            }
+            // Klammertitel in der Zwei-Stecker-Ansicht passt in die Gruppe
+            let (group_w, _) = bar_groups(2);
+            assert!(width("Connector 2", F::Title) + 6.0 <= group_w - 2.0 - 8.0);
+            let _ = DeleteDC(dc);
+        }
     }
 }
