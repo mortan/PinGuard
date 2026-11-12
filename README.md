@@ -42,6 +42,11 @@ Settings are stored in `%APPDATA%\PinGuard\pinguard.ini`.
 | Connection dot | Next to the PSU heading. Green = data is coming in, red = no data, orange ring = the connection was lost in the meantime. |
 | Status line | **ALARM C1/C2** (alarm reported by the PSU itself), **OVERCURRENT** (a pin above the red limit), **IMBALANCE**. Red = active, orange outline = was active (latched until you click it). |
 
+With the history chart enabled, the PSU group shows connector power over the last two minutes,
+with the peak marked:
+
+![History chart following a load cycle: power climbs to a 690 W peak and drops again, then the imbalance alarm fires](docs/history.gif)
+
 Hover over almost anything for a tooltip with exact values and limits. While an alarm is active or
 latched, its tooltip shows when it fired, how long it lasted and the worst value, e.g.
 "Triggered 14:32, pin 3: 9.6 A, duration 4 s".
@@ -54,9 +59,18 @@ Note: PSU power is the DC output power. The draw from the wall is roughly PSU po
 - **Minimize / close:** buttons appear at the top right while the mouse is over the window.
 - **Click the status line or the connection dot:** clear latched alarms.
 - **Double-click:** reset the peaks.
-- **Right-click:** menu with reset, *Limits and alarms …*, *Always on top*, *Minimize to notification area*,
-  *Start with Windows*, *Language*, *Event log* and *Exit*.
+- **Right-click:** menu with reset, *Limits and alarms …*, *Minimal view*, *Always on top*,
+  *Minimize to notification area*, *Start with Windows*, *Language*, *Event log* and *Exit*.
 - Only one instance runs. Starting it again brings the existing window to the front.
+
+### Minimal view
+
+Right-click → *Minimal view* shrinks the window to the pin bars. Below them are the connector power
+and a single status field: **ALL OK** with a green dot, red with the alarm name while an alarm is
+active (further alarms as "+1", "+2" …), or an orange outline while an alarm is latched. The link
+to Afterburner is part of this field, so a lost connection shows up there. Hover over the field to
+see every alarm's state, and click it to clear latched alarms. Choose the menu item again to return
+to the full view. The window keeps its height, and the choice is remembered.
 
 ### Tray
 
