@@ -1,6 +1,6 @@
 [package]
 name = "pinguard"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Compact 12V-2x6/PSU monitor (MSI MPG Ai1300TS via MSI Afterburner shared memory)"
 license = "MIT"
