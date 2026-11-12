@@ -5,9 +5,13 @@ values of the **MSI MPG Ai1300TS PCIE5**. It reads MSI Afterburner's shared memo
 (`MAHMSharedMemory`, PSU plugin `PSU.dll`) read-only and shows per-pin currents, faults and metrics.
 It runs on a second monitor while gaming, so **minimal RAM/CPU/GPU usage is the top requirement**.
 
-Detailed docs: `README.md` (German; features, INI keys, MAHM details, design decisions,
-measurements), `docs/plan-data-sources.md` and `docs/hid-protocol-analysis.md` (planned direct
-HID / HWiNFO data sources).
+Docs: `README.md` (English, user-facing only: features, controls, settings, resource usage),
+`docs/plan-data-sources.md` and `docs/hid-protocol-analysis.md` (planned direct HID / HWiNFO data
+sources). INI keys and defaults are defined in `src/settings.rs` and `src/model.rs`.
+
+Measured (release build, live data, game at ~500 W GPU load, 120 s): 14.2 MB working set, 3.0 MB
+private, 0.03 % total CPU (16 logical CPUs), 4 threads, no GPU engine usage. The first Direct2D
+version used 43 MB WS, 74 MB private, 21 threads. Re-measure after changes to drawing or polling.
 
 Thresholds: 12V-2x6 spec allows 9.2 A per pin (≈ 8.3 A/pin at 600 W). Default colors: green < 8 A,
 yellow 8–9.2 A, red ≥ 9.2 A, full scale 12 A.
@@ -60,7 +64,7 @@ src/
 - Every user-visible string goes through `src/i18n.rs` with both German and English text; numbers
   use the language's decimal separator. The settings dialog accepts both `,` and `.`.
 - New settings get an INI key with a default; invalid or missing values fall back to the default.
-  Document new keys and features in `README.md`.
-- Code comments and docs are in German. Commit messages are in English, imperative summary line plus
+  Document user-visible features in `README.md` (English, no implementation details).
+- Code comments are in German, docs in English. Commit messages are in English, imperative summary line plus
   a bullet list body.
 - The user communicates in German.
