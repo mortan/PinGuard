@@ -11,7 +11,9 @@ sources). INI keys and defaults are defined in `src/settings.rs` and `src/model.
 
 Measured (release build, live data, game at ~500 W GPU load, 120 s): 14.2 MB working set, 3.0 MB
 private, 0.03 % total CPU (16 logical CPUs), 4 threads, no GPU engine usage. The first Direct2D
-version used 43 MB WS, 74 MB private, 21 threads. Re-measure after changes to drawing or polling.
+version used 43 MB WS, 74 MB private, 21 threads. The first alarm sound loads the audio stack (`PlaySoundW`, src/sound.rs): about +3 MB WS,
++0.7 MB private and +4 threads until exit; nothing changes before an alarm sound has played.
+Re-measure after changes to drawing or polling.
 
 Thresholds: 12V-2x6 spec allows 9.2 A per pin (≈ 8.3 A/pin at 600 W). Default colors: green < 8.5 A,
 yellow 8.5–9.2 A, red ≥ 9.2 A, full scale 12 A. Imbalance defaults to percent (30 % above 20 A);

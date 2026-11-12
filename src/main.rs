@@ -14,6 +14,7 @@ mod model;
 mod render;
 mod settings;
 mod settings_dlg;
+mod sound;
 mod source;
 mod tip;
 mod tray;
@@ -29,7 +30,6 @@ use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Dwm::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::Globalization::GetUserDefaultUILanguage;
-use windows::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::HiDpi::*;
@@ -251,7 +251,7 @@ impl App {
         let any = |pick: fn(&model::AlarmCfg) -> bool| raised.iter().zip(&cfg.alarms).any(|(r, a)| *r && pick(a));
         unsafe {
             if any(|a| a.sound) {
-                let _ = MessageBeep(MB_ICONWARNING);
+                sound::play();
             }
             if any(|a| a.show) {
                 // Auch aus dem Infobereich: dort ist das Fenster minimiert

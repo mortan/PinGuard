@@ -183,7 +183,7 @@ For every alarm (connector 1, connector 2, overcurrent, imbalance, no data) you 
 
 - **Active:** evaluate and show it
 - **Latch:** keep it marked in orange until you click the status line
-- **Sound:** play a warning sound when it fires
+- **Sound:** play a short warning beep (two bursts of four quick beeps, about 1 s) when it fires
 - **Show:** bring the window to the front (without stealing focus) and flash it in the taskbar
 
 By default all alarms are active and latching. The alarms from the PSU (connector 1 and 2) and
